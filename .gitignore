@@ -1,0 +1,13 @@
+*.egg-info
+build
+build/*
+config.yml
+*.pyc
+*.deb
+MANIFEST
+dist/*
+dist
+.pypirc
+venv/
+*.swp
+.eggs/

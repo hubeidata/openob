@@ -1,0 +1,46 @@
+[Unit]
+Description=OpenOB Repeater Service
+Documentation=https://github.com/hubeidata/openob
+After=network-online.target redis.service
+Wants=network-online.target redis.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu
+
+# Environment variables
+Environment="GST_DEBUG=2"
+Environment="GST_DEBUG_NO_COLOR=1"
+
+# Command to run
+# Replace <PUBLIC_IP> with your server's public IP
+# Replace <PORT> with your desired RTP port (default: 5004)
+# Replace <JITTER> with jitter buffer in ms (default: 30)
+ExecStart=/usr/local/bin/openob <PUBLIC_IP> ec2-repeater transmission repeater -p 5004 -j 30
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openob-repeater
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,96 @@
+import sys
+import time
+from openob.logger import LoggerFactory
+from openob.rtp.tx import RTPTransmitter
+from openob.rtp.rx import RTPReceiver
+from openob.rtp.repeater import RTPRepeater
+from openob.link_config import LinkConfig
+
+class Node(object):
+
+    """
+        OpenOB node instance.
+
+        Nodes run links. Each Node looks after its end of a link, ensuring
+        that it remains running and tries to recover from failures, as well as
+        responding to configuration changes.
+
+        Nodes have a name; everything else is link specific.
+
+        For instance, a node might be the 'studio' node, which would run a
+        'tx' end for the 'stl' link.
+
+        Nodes have a config host which is where they store their inter-Node
+        data and communicate with other Nodes.
+    """
+
+    def __init__(self, node_name):
+        """Set up a new node."""
+        self.node_name = node_name
+        self.logger_factory = LoggerFactory()
+        self.logger = self.logger_factory.getLogger('node.%s' % self.node_name)
+
+    def run_link(self, link_config, audio_interface):
+        """
+          Run a new TX, RX, or REPEATER node.
+        """
+        # We're now entering the realm where we should desperately try and
+        # maintain a link under all circumstances forever.
+        self.logger.info("Link %s initial setup start on %s" % (link_config.name, self.node_name))
+        link_logger = self.logger_factory.getLogger('node.%s.link.%s' % (self.node_name, link_config.name))
+        while True:
+            try:
+                if audio_interface.mode == 'tx':
+                    try:
+                        link_logger.info("Starting up transmitter")
+                        transmitter = RTPTransmitter(self.node_name, link_config, audio_interface)
+                        transmitter.run()
+                        caps = transmitter.get_caps()
+                        link_logger.debug("Got caps from transmitter, setting config")
+                        link_config.set("caps", caps)
+                        transmitter.loop()
+                    except Exception as e:
+                        link_logger.exception("Transmitter crashed for some reason! Restarting...")
+                        time.sleep(0.5)
+                elif audio_interface.mode == 'rx':
+                    link_logger.info("Waiting for transmitter capabilities...")
+                    caps = link_config.blocking_get("caps")
+                    link_logger.info("Got caps from transmitter")
+                    try:
+                        link_logger.info("Starting up receiver")
+                        receiver = RTPReceiver(self.node_name, link_config, audio_interface)
+                        receiver.run()
+                        receiver.loop()
+                    except Exception as e:
+                        link_logger.exception("Receiver crashed for some reason! Restarting...")
+                        time.sleep(0.1)
+                elif audio_interface.mode == 'repeater':
+                    try:
+                        link_logger.info("Starting up repeater (passthrough mode)")
+                        repeater = RTPRepeater(self.node_name, link_config)
+                        
+                        # Register peers from configuration if available
+                        # Peers can be pre-configured or will be discovered dynamically
+                        try:
+                            peer_count = link_config.get("peer_count")
+                            if peer_count:
+                                for i in range(int(peer_count)):
+                                    peer_id = "peer%d" % i
+                                    peer_host = link_config.get("peer_%s_rtp_host" % peer_id)
+                                    peer_port = link_config.get("peer_%s_rtp_port" % peer_id)
+                                    if peer_host and peer_port:
+                                        repeater.register_peer(peer_id, (peer_host, int(peer_port)))
+                        except Exception as e:
+                            link_logger.debug("No pre-configured peers found, will discover dynamically: %s" % e)
+                        
+                        repeater.run()
+                        repeater.loop()
+                    except Exception as e:
+                        link_logger.exception("Repeater crashed for some reason! Restarting...")
+                        time.sleep(0.5)
+                else:
+                    link_logger.critical("Unknown audio interface mode (%s)!" % audio_interface.mode)
+                    sys.exit(1)
+            except Exception as e:
+                link_logger.exception("Unknown exception thrown - please report this as a bug! %s" % e)
+                raise
