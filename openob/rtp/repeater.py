@@ -52,7 +52,41 @@ class RTPRepeater(object):
         self.logger.info('Repeater will listen on RTP port %d and RTCP port %d' % (self.rtp_port, self.rtcp_port))
         self.logger.info('Jitter buffer set to %d ms' % self.jitter_buffer_ms)
         
+        # Clean up old peer registrations from Redis
+        self._cleanup_old_peer_data()
+        
         self.build_pipeline()
+
+    def _cleanup_old_peer_data(self):
+        """Clean up old peer registrations from previous sessions"""
+        try:
+            # Find all peer-related keys for this link
+            pattern = 'openob:%s:*' % self.link_config.name
+            keys = self.link_config.redis.keys(pattern)
+            
+            # Delete keys that look like peer registrations
+            deleted_count = 0
+            for key in keys:
+                key_str = key.decode('utf-8') if isinstance(key, bytes) else key
+                # Delete keys with node names that have peer data
+                if any(x in key_str for x in [':receiver_host', ':port', ':type']):
+                    # Check if it's a peer key (has node name like recepteur, emetteur, etc)
+                    parts = key_str.split(':')
+                    if len(parts) >= 3:
+                        # Keep main transmission config, delete node-specific peer data
+                        node_name = parts[2]
+                        if node_name not in ['caps', 'encoding', 'bitrate', 'port', 
+                                               'receiver_host', 'name', 'input_samplerate',
+                                               'jitter_buffer', 'multicast', 'opus_complexity',
+                                               'opus_dtx', 'opus_fec', 'opus_framesize',
+                                               'opus_loss_expectation']:
+                            self.link_config.redis.delete(key_str)
+                            deleted_count += 1
+            
+            if deleted_count > 0:
+                self.logger.debug('Cleaned up %d old peer registration(s) from Redis' % deleted_count)
+        except Exception as e:
+            self.logger.warning('Could not cleanup old peer data: %s' % e)
 
     def run(self):
         """Start the repeater pipeline"""
@@ -97,22 +131,9 @@ class RTPRepeater(object):
     def discover_peers_from_redis(self):
         """
         Discover new peers from Redis configuration
-        This checks for encoder and decoder nodes that have registered
+        This checks for decoder nodes that have registered
         """
         try:
-            # Check for encoder (transmitter)
-            encoder_host = self.link_config.get('receiver_host')
-            encoder_port = self.link_config.get('port')
-            
-            if encoder_host and encoder_port and not self.encoder_detected:
-                self.encoder_detected = True
-                # Encoder is sending to us, we need to forward to decoder
-                self.logger.info('━' * 70)
-                self.logger.info('🎤 ENCODER DETECTED!')
-                self.logger.info('   Node: encoder')
-                self.logger.info('   RTP: %s:%s' % (encoder_host, encoder_port))
-                self.logger.info('━' * 70)
-            
             # Check for decoder (receiver) - look for nodes in Redis
             # The decoder will register itself when it starts
             if not self.decoder_detected:
@@ -163,7 +184,10 @@ class RTPRepeater(object):
                             self.logger.info('🔊 DECODER CONNECTED!')
                             self.logger.info('   Node: %s' % decoder_node)
                             self.logger.info('   RTP: %s:%s' % (decoder_host, decoder_port))
-                            self.logger.info('   Status: Forwarding audio')
+                            if self.encoder_detected:
+                                self.logger.info('   Status: Receiving audio from encoder')
+                            else:
+                                self.logger.info('   Status: Waiting for encoder...')
                             self.logger.info('━' * 70)
                 except Exception as e:
                     self.logger.warning('Error checking for decoder: %s' % e)
@@ -190,34 +214,32 @@ class RTPRepeater(object):
     def build_rtp_passthrough(self):
         """
         Build RTP passthrough pipeline:
-        udpsrc (listen) -> rtpjitterbuffer -> appsink (forward to peers)
+        udpsrc (listen) -> appsink (forward to peers)
+        Note: Using direct path without jitterbuffer for immediate forwarding
         """
-        self.logger.debug('Building RTP passthrough')
+        self.logger.debug('Building RTP passthrough (direct mode)')
         
         # RTP input
         self.rtp_src = Gst.ElementFactory.make('udpsrc', 'rtp_src')
         self.rtp_src.set_property('port', self.rtp_port)
         self.rtp_src.set_property('caps', Gst.Caps.from_string('application/x-rtp'))
         
-        # Jitter buffer (minimal latency)
-        self.rtp_jitter = Gst.ElementFactory.make('rtpjitterbuffer', 'rtp_jitter')
-        self.rtp_jitter.set_property('latency', self.jitter_buffer_ms)
-        self.rtp_jitter.set_property('drop-on-latency', True)
-        
         # App sink to capture packets and forward them
         self.rtp_sink = Gst.ElementFactory.make('appsink', 'rtp_sink')
         self.rtp_sink.set_property('emit-signals', True)
         self.rtp_sink.set_property('sync', False)
+        self.rtp_sink.set_property('max-buffers', 1)  # Keep only latest buffer
+        self.rtp_sink.set_property('drop', True)  # Drop old buffers
         self.rtp_sink.connect('new-sample', self.on_rtp_packet)
         
         # Add elements to pipeline
         self.pipeline.add(self.rtp_src)
-        self.pipeline.add(self.rtp_jitter)
         self.pipeline.add(self.rtp_sink)
         
-        # Link elements
-        self.rtp_src.link(self.rtp_jitter)
-        self.rtp_jitter.link(self.rtp_sink)
+        # Link elements directly (no jitterbuffer for now)
+        self.rtp_src.link(self.rtp_sink)
+        
+        self.logger.info('RTP pipeline: udpsrc -> appsink (direct forwarding)')
         
         # Create UDP socket for sending RTP packets
         self.rtp_send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -255,23 +277,32 @@ class RTPRepeater(object):
         """Handle incoming RTP packet and forward to other peers"""
         sample = appsink.emit('pull-sample')
         if sample:
-            buffer = sample.get_buffer()
+            # Detect encoder on first RTP packet received
+            if not self.encoder_detected:
+                self.encoder_detected = True
+                encoder_host = self.link_config.get('receiver_host')
+                encoder_port = self.link_config.get('port')
+                self.logger.info('━' * 70)
+                self.logger.info('🎤 ENCODER DETECTED!')
+                self.logger.info('   Receiving RTP packets')
+                if encoder_host and encoder_port:
+                    self.logger.info('   Expected from: %s:%s' % (encoder_host, encoder_port))
+                self.logger.info('   Status: Active transmission')
+                if len(self.peers) > 0:
+                    self.logger.info('   Forwarding to %d peer(s): %s' % (len(self.peers), ', '.join(self.peers.keys())))
+                    self.logger.info('   🔴 AUDIO STREAMING NOW!')
+                else:
+                    self.logger.info('   ⚠️  No decoders registered yet')
+                self.logger.info('━' * 70)
             
-            # Get source address (peer that sent this packet)
-            # Note: udpsrc doesn't directly expose source address, so we use a workaround
-            # In production, you might want to use a custom element or socket
+            buffer = sample.get_buffer()
             
             # Extract packet data
             success, map_info = buffer.map(Gst.MapFlags.READ)
             if success:
                 packet_data = map_info.data
                 
-                # Register or update peer
-                # Since we can't easily get source address from GStreamer udpsrc,
-                # we'll use a simplified approach: forward to all registered peers
-                # In a real implementation, you'd track source addresses via custom UDP handling
-                
-                # Forward to all OTHER peers
+                # Forward to all registered peers
                 self.forward_rtp_to_peers(packet_data)
                 
                 buffer.unmap(map_info)

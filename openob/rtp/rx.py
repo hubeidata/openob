@@ -42,9 +42,31 @@ class RTPReceiver(object):
             self.link_config.redis.set('%s:port' % key_prefix, str(self.link_config.port))
             self.link_config.redis.set('%s:type' % key_prefix, 'decoder')
             
-            self.logger.info('Published decoder address to Redis: %s:%s' % (local_ip, self.link_config.port))
+            # Set expiration time (TTL) of 60 seconds - will be refreshed periodically
+            self.link_config.redis.expire('%s:receiver_host' % key_prefix, 60)
+            self.link_config.redis.expire('%s:port' % key_prefix, 60)
+            self.link_config.redis.expire('%s:type' % key_prefix, 60)
+            
+            self.logger.info('Published decoder address to Redis: %s:%s (TTL: 60s)' % (local_ip, self.link_config.port))
+            
+            # Schedule periodic refresh of the registration
+            GLib.timeout_add_seconds(30, self._refresh_decoder_registration, key_prefix, local_ip)
         except Exception as e:
             self.logger.warning('Could not publish decoder address to Redis: %s' % e)
+
+    def _refresh_decoder_registration(self, key_prefix, local_ip):
+        """Refresh decoder registration in Redis to keep it alive"""
+        try:
+            # Check if still connected
+            if hasattr(self, 'pipeline') and self.pipeline:
+                self.link_config.redis.expire('%s:receiver_host' % key_prefix, 60)
+                self.link_config.redis.expire('%s:port' % key_prefix, 60)
+                self.link_config.redis.expire('%s:type' % key_prefix, 60)
+                return True  # Continue periodic refresh
+            return False  # Stop refresh
+        except Exception as e:
+            self.logger.debug('Could not refresh decoder registration: %s' % e)
+            return True  # Try again next time
 
     def run(self):
         self.pipeline.set_state(Gst.State.PLAYING)
