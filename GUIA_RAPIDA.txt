@@ -1,0 +1,112 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    OPENOB - MODO REPETIDOR - GUÍA RÁPIDA                    ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+📋 CONFIGURACIÓN:
+   Encoder:   192.168.18.16  (Captura audio)
+   Repeater:  192.168.15.34  (Servidor intermedio)
+   Decoder:   192.168.18.35  (Reproduce audio)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 ORDEN DE INICIO:
+
+   1️⃣  Redis (en 192.168.15.34)
+       └─ sudo systemctl start redis-server
+
+   2️⃣  Repeater (en 192.168.15.34)
+       └─ ./start-repeater.sh
+
+   3️⃣  Encoder (en 192.168.18.16)
+       └─ ./start-encoder.sh [bitrate]
+
+   4️⃣  Decoder (en 192.168.18.35)
+       └─ ./start-decoder.sh
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 COMANDOS MANUALES:
+
+REPEATER (192.168.15.34):
+┌──────────────────────────────────────────────────────────────────────────┐
+│ sg audio -c "openob 192.168.15.34 repeater transmission repeater \      │
+│   -p 5004 -j 30"                                                         │
+└──────────────────────────────────────────────────────────────────────────┘
+
+ENCODER (192.168.18.16):
+┌──────────────────────────────────────────────────────────────────────────┐
+│ sg audio -c "openob 192.168.15.34 encoder transmission tx \             │
+│   192.168.15.34 -e opus -b 128 -r 48000 -j 60 -a alsa -d plughw:0 \     │
+│   -p 5004"                                                               │
+└──────────────────────────────────────────────────────────────────────────┘
+
+DECODER (192.168.18.35):
+┌──────────────────────────────────────────────────────────────────────────┐
+│ sg audio -c "openob 192.168.15.34 decoder transmission rx \             │
+│   -a alsa -d plughw:0"                                                   │
+└──────────────────────────────────────────────────────────────────────────┘
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎛️  BITRATES RECOMENDADOS (Opus):
+
+   📻 Voz/Talk show:     64 kbps   → ./start-encoder.sh 64
+   🎵 Música FM:        128 kbps   → ./start-encoder.sh 128  ✅ RECOMENDADO
+   🎼 Música HD:        192 kbps   → ./start-encoder.sh 192
+   💿 Máxima calidad:   256 kbps   → ./start-encoder.sh 256
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 VERIFICACIÓN:
+
+   ✓ Redis funcionando:
+     redis-cli -h 192.168.15.34 ping
+     
+   ✓ Puerto abierto:
+     sudo netstat -tulnp | grep 5004
+     
+   ✓ Volumen activado:
+     sg audio -c "amixer sget Master"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🛑 DETENER TODO:
+
+   ./stop-all.sh
+
+   O manualmente:
+   pkill -f "openob.*transmission"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔍 SOLUCIÓN RÁPIDA DE PROBLEMAS:
+
+   ❌ No se conecta a Redis:
+      → Verificar Redis: sudo systemctl status redis-server
+      → Verificar firewall: sudo ufw status
+      
+   ❌ No hay audio:
+      → Activar volumen: sg audio -c "amixer set Master unmute"
+      → Verificar dispositivo: aplay -l
+      
+   ❌ Error charset:
+      → Ya corregido en link_config.py (eliminado charset="utf-8")
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📚 DOCUMENTACIÓN COMPLETA:
+
+   /home/server/openob/MANUAL_REPETIDOR.txt
+   /home/server/openob/README_REPEATER.md
+   /home/server/openob/REPEATER_MODE.md
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🌟 CARACTERÍSTICAS:
+
+   • Latencia: +10-40ms (modo passthrough)
+   • NAT-friendly: Sin port forwarding
+   • CPU eficiente: Sin procesamiento de audio
+   • Calidad: Opus 128kbps ≈ MP3 192kbps
+
+╚══════════════════════════════════════════════════════════════════════════════╝

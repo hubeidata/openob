@@ -1,0 +1,526 @@
+================================================================================
+MANUAL DE CONFIGURACIÓN DE OPENOB - MODO REPETIDOR
+================================================================================
+Fecha: 2 de octubre de 2025
+Sistema: Ubuntu Server
+Repositorio: https://github.com/hubeidata/openob.git
+Ubicación: /home/server/openob
+================================================================================
+
+DESCRIPCIÓN DEL MODO REPETIDOR
+-------------------------------
+El modo repetidor (repeater) permite crear enlaces de audio punto a punto a 
+través de Internet usando un servidor intermedio como repetidor, sin necesidad 
+de abrir puertos en los routers locales.
+
+✨ VENTAJAS:
+- 🚀 Baja latencia: Solo 10-40ms adicionales
+- 🔄 Passthrough: Reenvía paquetes RTP/RTCP sin decodificar/encodear
+- 🌐 NAT-friendly: Los endpoints se conectan saliente al servidor
+- 💻 CPU eficiente: Sin carga de procesamiento de audio
+- 🔌 Plug & Play: Registro automático de peers
+
+================================================================================
+ARQUITECTURA DEL SISTEMA
+================================================================================
+
+┌──────────────────┐                  ┌──────────────────┐                  ┌──────────────────┐
+│                  │                  │                  │                  │                  │
+│    ENCODER       │─────(RTP)───────▶│    REPEATER      │─────(RTP)───────▶│    DECODER       │
+│  192.168.18.16   │                  │  192.168.15.34   │                  │  192.168.18.35   │
+│                  │◀────(RTCP)───────│                  │◀────(RTCP)───────│                  │
+│  (Captura audio) │                  │  (Reenvío RTP)   │                  │  (Reproduce)     │
+│  Conecta al      │                  │  Puerto: 5004    │                  │  Conecta al      │
+│  repeater        │                  │  Buffer: 30ms    │                  │  repeater        │
+└──────────────────┘                  └──────────────────┘                  └──────────────────┘
+      LOCAL                                SERVIDOR                              LOCAL
+  (Emisora/Studio)                    (Cloud/VPS/EC2)                        (Receptor)
+
+Notas importantes:
+- Los endpoints (encoder/decoder) se conectan SALIENTE al repeater
+- No se requiere port forwarding en routers locales
+- El repeater solo reenvía paquetes, no procesa audio
+- Redis coordina la conexión entre los tres nodos
+
+================================================================================
+INSTALACIÓN Y CONFIGURACIÓN
+================================================================================
+
+1. CLONAR REPOSITORIO
+----------------------
+cd /home/server
+rm -rf openob  # Si existe versión anterior
+git clone https://github.com/hubeidata/openob.git
+cd openob
+
+2. INSTALAR DEPENDENCIAS
+-------------------------
+# Ya instaladas previamente:
+# - python3-pip
+# - python3-gst-1.0
+# - gstreamer1.0-plugins-*
+# - redis-server
+
+3. INSTALAR OPENOB
+-------------------
+pip3 install --break-system-packages -e .
+
+4. APLICAR FIX DE REDIS
+------------------------
+Archivo modificado: /home/server/openob/openob/link_config.py
+Línea 30:
+  ANTES: self.redis = redis.StrictRedis(host=self.redis_host, charset="utf-8", decode_responses=True)
+  AHORA: self.redis = redis.StrictRedis(host=self.redis_host, decode_responses=True)
+
+Motivo: Redis 6.4.0+ no acepta el parámetro 'charset'
+
+5. CONFIGURAR AUDIO
+--------------------
+Archivo: ~/.asoundrc (ya configurado para hw:0,0)
+Usuario agregado al grupo 'audio' (ejecutar con sg audio -c)
+
+================================================================================
+CONFIGURACIÓN DE LOS TRES NODOS
+================================================================================
+
+IMPORTANTE: Redis debe estar ejecutándose en el servidor repetidor (192.168.15.34)
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PASO 1: CONFIGURAR SERVIDOR REDIS (en 192.168.15.34)                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+1. Instalar Redis:
+   sudo apt install redis-server
+
+2. Configurar Redis para aceptar conexiones externas:
+   sudo nano /etc/redis/redis.conf
+   
+   # Cambiar:
+   bind 127.0.0.1 ::1
+   # Por:
+   bind 0.0.0.0
+   
+   # O específicamente:
+   bind 192.168.15.34
+
+3. Reiniciar Redis:
+   sudo systemctl restart redis-server
+
+4. Verificar:
+   sudo netstat -tlnp | grep 6379
+
+5. Configurar firewall (si aplica):
+   sudo ufw allow 6379/tcp
+   sudo ufw allow 5004/udp  # Puerto RTP
+
+⚠️ SEGURIDAD: En producción, limita el acceso a Redis solo a las IPs específicas:
+   sudo ufw allow from 192.168.18.16 to any port 6379
+   sudo ufw allow from 192.168.18.35 to any port 6379
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PASO 2: INICIAR EL REPETIDOR (192.168.15.34)                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+En el servidor 192.168.15.34:
+
+sg audio -c "/home/server/openob/bin/openob 192.168.15.34 repeater transmission repeater -p 5004 -j 30"
+
+Parámetros:
+  192.168.15.34    : IP del servidor Redis (localhost en este caso)
+  repeater         : Nombre del nodo repetidor
+  transmission     : Nombre del enlace (debe ser igual en los 3 nodos)
+  repeater         : Modo (repeater)
+  -p 5004          : Puerto RTP base
+  -j 30            : Jitter buffer de 30ms
+
+Salida esperada:
+  2025-10-02 XX:XX:XX,XXX - openob.link.transmission.config - INFO - Connecting to configuration host 192.168.15.34
+  2025-10-02 XX:XX:XX,XXX - openob.node.repeater - INFO - Link transmission initial setup start on repeater
+  2025-10-02 XX:XX:XX,XXX - openob.node.repeater.link.transmission.repeater - INFO - Starting up repeater
+  2025-10-02 XX:XX:XX,XXX - openob.node.repeater.link.transmission.repeater - INFO - Listening on port 5004
+  2025-10-02 XX:XX:XX,XXX - openob.node.repeater.link.transmission.repeater - INFO - Waiting for peers to register...
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PASO 3: INICIAR EL ENCODER (192.168.18.16)                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+En el encoder (emisora/studio) 192.168.18.16:
+
+# Opción A: Audio PCM sin comprimir (máxima calidad, alta latencia)
+sg audio -c "/home/server/openob/bin/openob 192.168.15.34 encoder transmission tx 192.168.15.34 -e pcm -r 48000 -j 60 -a alsa -d plughw:0 -p 5004"
+
+# Opción B: Audio Opus comprimido (recomendado para Internet)
+sg audio -c "/home/server/openob/bin/openob 192.168.15.34 encoder transmission tx 192.168.15.34 -e opus -b 128 -r 48000 -j 60 -a alsa -d plughw:0 -p 5004"
+
+Parámetros:
+  192.168.15.34    : IP del servidor Redis
+  encoder          : Nombre del nodo encoder
+  transmission     : Nombre del enlace (igual en los 3 nodos)
+  tx               : Modo transmisor
+  192.168.15.34    : IP del repetidor (destino)
+  -e opus          : Codec (opus o pcm)
+  -b 128           : Bitrate en kbps (solo para Opus)
+  -r 48000         : Sample rate (48000 Hz)
+  -j 60            : Jitter buffer (60ms recomendado para Internet)
+  -a alsa          : Input de audio ALSA
+  -d plughw:0      : Dispositivo de captura de audio
+  -p 5004          : Puerto RTP (debe coincidir con el repetidor)
+
+Salida esperada:
+  2025-10-02 XX:XX:XX,XXX - openob.link.transmission.config - INFO - Connecting to configuration host 192.168.15.34
+  2025-10-02 XX:XX:XX,XXX - openob.node.encoder - INFO - Link transmission initial setup start on encoder
+  2025-10-02 XX:XX:XX,XXX - openob.node.encoder.link.transmission.tx - INFO - Starting up transmitter
+  2025-10-02 XX:XX:XX,XXX - openob.node.encoder.link.transmission.tx - INFO - Transmitting to 192.168.15.34:5004
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PASO 4: INICIAR EL DECODER (192.168.18.35)                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+En el decoder (receptor) 192.168.18.35:
+
+sg audio -c "/home/server/openob/bin/openob 192.168.15.34 decoder transmission rx -a alsa -d plughw:0"
+
+Parámetros:
+  192.168.15.34    : IP del servidor Redis
+  decoder          : Nombre del nodo decoder
+  transmission     : Nombre del enlace (igual en los 3 nodos)
+  rx               : Modo receptor
+  -a alsa          : Output de audio ALSA
+  -d plughw:0      : Dispositivo de reproducción de audio
+
+Salida esperada:
+  2025-10-02 XX:XX:XX,XXX - openob.link.transmission.config - INFO - Connecting to configuration host 192.168.15.34
+  2025-10-02 XX:XX:XX,XXX - openob.node.decoder - INFO - Link transmission initial setup start on decoder
+  2025-10-02 XX:XX:XX,XXX - openob.node.decoder.link.transmission.rx - INFO - Waiting for transmitter capabilities...
+  2025-10-02 XX:XX:XX,XXX - openob.node.decoder.link.transmission.rx - INFO - Got caps from transmitter
+  2025-10-02 XX:XX:XX,XXX - openob.node.decoder.link.transmission.rx - INFO - Starting up receiver
+  2025-10-02 XX:XX:XX,XXX - openob.node.decoder.link.transmission.rx - INFO - Receiving stereo audio transmission
+
+================================================================================
+ORDEN DE INICIO (IMPORTANTE)
+================================================================================
+
+1. ✅ Primero: REDIS (192.168.15.34)
+   sudo systemctl start redis-server
+
+2. ✅ Segundo: REPEATER (192.168.15.34)
+   sg audio -c "openob 192.168.15.34 repeater transmission repeater -p 5004 -j 30"
+
+3. ✅ Tercero: ENCODER (192.168.18.16)
+   sg audio -c "openob 192.168.15.34 encoder transmission tx 192.168.15.34 -e opus -b 128 -r 48000 -j 60 -a alsa -d plughw:0 -p 5004"
+
+4. ✅ Cuarto: DECODER (192.168.18.35)
+   sg audio -c "openob 192.168.15.34 decoder transmission rx -a alsa -d plughw:0"
+
+================================================================================
+VERIFICACIÓN Y MONITOREO
+================================================================================
+
+1. VERIFICAR REDIS
+-------------------
+# En 192.168.15.34
+redis-cli ping
+# Respuesta esperada: PONG
+
+# Ver keys del enlace
+redis-cli keys "openob:transmission:*"
+
+# Ver configuración del enlace
+redis-cli get "openob:transmission:port"
+redis-cli get "openob:transmission:encoding"
+
+2. VERIFICAR PUERTOS
+---------------------
+# En 192.168.15.34 (repeater)
+sudo netstat -tulnp | grep 5004
+# Debe mostrar el proceso openob escuchando en UDP 5004
+
+3. VERIFICAR AUDIO
+-------------------
+# En 192.168.18.16 (encoder)
+# Verificar que el dispositivo de captura funciona
+arecord -D plughw:0 -d 5 -f cd test.wav && aplay test.wav
+
+# En 192.168.18.35 (decoder)
+# Verificar volumen
+sg audio -c "amixer sget Master"
+# Debe estar unmute y con volumen >0%
+
+4. LOGS DETALLADOS
+-------------------
+# Agregar -v para verbose logging
+sg audio -c "openob 192.168.15.34 repeater transmission repeater -p 5004 -j 30 -v"
+
+================================================================================
+SOLUCIÓN DE PROBLEMAS
+================================================================================
+
+PROBLEMA 1: "Unable to connect to configuration host"
+------------------------------------------------------
+Causa: Redis no está accesible
+Solución:
+  1. Verificar que Redis esté ejecutándose en 192.168.15.34
+  2. Verificar bind address en /etc/redis/redis.conf
+  3. Verificar firewall: sudo ufw status
+  4. Probar conexión: redis-cli -h 192.168.15.34 ping
+
+PROBLEMA 2: "Could not open audio device for playback"
+--------------------------------------------------------
+Causa: Permisos de audio
+Solución:
+  1. Verificar grupo audio: groups
+  2. Agregar usuario: sudo usermod -a -G audio $USER
+  3. Cerrar sesión y volver a entrar, o usar: sg audio -c "comando"
+  4. Verificar volumen: sg audio -c "amixer sget Master"
+
+PROBLEMA 3: "Redis.__init__() got an unexpected keyword argument 'charset'"
+---------------------------------------------------------------------------
+Causa: Versión nueva de redis-py incompatible
+Solución:
+  Ya aplicado el fix en link_config.py (eliminado charset="utf-8")
+
+PROBLEMA 4: No se escucha audio en el decoder
+-----------------------------------------------
+Causa: Master está en mute o volumen bajo
+Solución:
+  sg audio -c "amixer set Master unmute"
+  sg audio -c "amixer set Master 100%"
+  sg audio -c "amixer set Speaker unmute"
+
+PROBLEMA 5: Latencia muy alta
+-------------------------------
+Causa: Buffer de jitter muy grande
+Solución:
+  - Reducir -j en encoder y decoder (mínimo 10-20ms en LAN)
+  - Para Internet usar -j 40-60ms
+  - Usar codec Opus en vez de PCM
+
+PROBLEMA 6: Paquetes perdidos / Audio entrecortado
+----------------------------------------------------
+Causa: Red inestable o buffer insuficiente
+Solución:
+  - Aumentar jitter buffer: -j 80 o más
+  - Reducir bitrate Opus: -b 64 o -b 96
+  - Verificar calidad de red con: mtr 192.168.15.34
+
+================================================================================
+OPCIONES DE CODEC Y BITRATE
+================================================================================
+
+OPUS (Recomendado para Internet):
+----------------------------------
+Bitrates disponibles: 16, 24, 32, 48, 64, 96, 128, 192, 256, 384 kbps
+
+Uso recomendado por aplicación:
+  - Voz/Talk show:      -b 64  (64 kbps)
+  - Música FM:          -b 128 (128 kbps) ✅ RECOMENDADO
+  - Música HD:          -b 192 (192 kbps)
+  - Máxima calidad:     -b 256 (256 kbps)
+
+Características Opus:
+  + Latencia interna: <25ms
+  + Soporte FEC (corrección de errores): --fec
+  + Soporte DTX (ahorro en silencios): --dtx
+  + Complejidad ajustable: --complexity 0-10
+
+Ejemplo completo:
+  -e opus -b 128 --fec --complexity 9
+
+PCM (Solo para LANs de alta velocidad):
+----------------------------------------
+  - Sin compresión (16-bit linear)
+  - Requiere ~1.15 GB/hora (estéreo 48kHz)
+  - Latencia interna: <5ms
+  - Uso: -e pcm -r 48000
+
+⚠️ PCM no es recomendado para Internet debido al alto consumo de ancho de banda
+
+================================================================================
+CONSUMO DE RED Y COSTOS (Referencia AWS EC2)
+================================================================================
+
+Con PCM 48kHz/16bit/stereo:
+  - Consumo: ~1.15 GB/hora
+  - Costo aprox: $0.09/hora (us-east-1)
+  - Ancho de banda: ~2.5 Mbps
+
+Con Opus 128kbps:
+  - Consumo: ~113 MB/hora
+  - Costo aprox: $0.01/hora
+  - Ancho de banda: ~256 kbps
+
+Con Opus 64kbps:
+  - Consumo: ~56 MB/hora
+  - Costo aprox: $0.005/hora
+  - Ancho de banda: ~128 kbps
+
+================================================================================
+SCRIPTS DE AUTOMATIZACIÓN
+================================================================================
+
+SCRIPT 1: Iniciar Repeater
+----------------------------
+Crear: /home/server/openob/start-repeater.sh
+
+#!/bin/bash
+sg audio -c "/home/server/openob/bin/openob 192.168.15.34 repeater transmission repeater -p 5004 -j 30"
+
+Uso: ./start-repeater.sh
+
+
+SCRIPT 2: Iniciar Encoder
+---------------------------
+Crear: /home/server/openob/start-encoder.sh
+
+#!/bin/bash
+REPEATER_IP="192.168.15.34"
+BITRATE="${1:-128}"  # Default 128kbps
+
+sg audio -c "/home/server/openob/bin/openob $REPEATER_IP encoder transmission tx $REPEATER_IP \
+  -e opus -b $BITRATE -r 48000 -j 60 -a alsa -d plughw:0 -p 5004"
+
+Uso: ./start-encoder.sh [bitrate]
+     ./start-encoder.sh 128
+
+
+SCRIPT 3: Iniciar Decoder
+---------------------------
+Crear: /home/server/openob/start-decoder.sh
+
+#!/bin/bash
+REPEATER_IP="192.168.15.34"
+
+sg audio -c "/home/server/openob/bin/openob $REPEATER_IP decoder transmission rx -a alsa -d plughw:0"
+
+Uso: ./start-decoder.sh
+
+
+SCRIPT 4: Detener Todo
+------------------------
+Crear: /home/server/openob/stop-all.sh
+
+#!/bin/bash
+pkill -f "openob.*transmission"
+echo "OpenOB detenido"
+
+Uso: ./stop-all.sh
+
+================================================================================
+SERVICIO SYSTEMD (OPCIONAL)
+================================================================================
+
+Para el repeater, se puede crear un servicio systemd:
+
+Archivo: /etc/systemd/system/openob-repeater.service
+
+[Unit]
+Description=OpenOB Audio Repeater
+After=network.target redis-server.service
+Requires=redis-server.service
+
+[Service]
+Type=simple
+User=server
+Group=audio
+WorkingDirectory=/home/server/openob
+ExecStart=/usr/bin/sg audio -c "/home/server/openob/bin/openob 192.168.15.34 repeater transmission repeater -p 5004 -j 30"
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+Activar:
+  sudo systemctl enable openob-repeater
+  sudo systemctl start openob-repeater
+  sudo systemctl status openob-repeater
+
+Ver logs:
+  sudo journalctl -u openob-repeater -f
+
+================================================================================
+SEGURIDAD Y MEJORES PRÁCTICAS
+================================================================================
+
+1. LIMITAR ACCESO A REDIS
+   sudo ufw allow from 192.168.18.16 to any port 6379
+   sudo ufw allow from 192.168.18.35 to any port 6379
+   sudo ufw deny 6379
+
+2. USAR CONTRASEÑA EN REDIS
+   En /etc/redis/redis.conf:
+   requirepass tu_contraseña_segura
+   
+   Modificar comandos openob para usar contraseña (requiere modificación de código)
+
+3. CONSIDERAR VPN (Producción)
+   - WireGuard VPN entre los 3 nodos
+   - Evita exponer Redis a Internet
+   - Encripta todo el tráfico RTP
+
+4. MONITOREO
+   - Logs centralizados (rsyslog, ELK)
+   - Alertas de desconexión
+   - Métricas de latencia y jitter
+
+5. FIREWALL
+   Repeater (192.168.15.34):
+     sudo ufw allow 5004/udp  # RTP
+     sudo ufw allow 6379/tcp  # Redis (limitado a IPs conocidas)
+
+================================================================================
+DOCUMENTACIÓN ADICIONAL
+================================================================================
+
+En el repositorio:
+  - README_REPEATER.md      : Información general del modo repeater
+  - REPEATER_MODE.md        : Documentación técnica completa
+  - EXAMPLES.md             : Ejemplos de uso
+  - GETTING_STARTED.md      : Guía de inicio rápido
+  - setup_ec2_repeater.sh   : Script automático para AWS EC2
+
+================================================================================
+RESUMEN DE COMANDOS RÁPIDOS
+================================================================================
+
+# REPEATER (192.168.15.34):
+sg audio -c "openob 192.168.15.34 repeater transmission repeater -p 5004 -j 30"
+
+# ENCODER (192.168.18.16):
+sg audio -c "openob 192.168.15.34 encoder transmission tx 192.168.15.34 -e opus -b 128 -r 48000 -j 60 -a alsa -d plughw:0 -p 5004"
+
+# DECODER (192.168.18.35):
+sg audio -c "openob 192.168.15.34 decoder transmission rx -a alsa -d plughw:0"
+
+# DETENER:
+pkill -f "openob.*transmission"
+
+# VERIFICAR REDIS:
+redis-cli -h 192.168.15.34 ping
+
+# VERIFICAR VOLUMEN:
+sg audio -c "amixer sget Master"
+
+# ACTIVAR VOLUMEN:
+sg audio -c "amixer set Master unmute"
+
+================================================================================
+AUTOR Y LICENCIA
+================================================================================
+
+OpenOB Original:
+  Copyright (c) 2018, James Harrison
+  https://github.com/JamesHarrison/openob
+
+OpenOB con Modo Repeater:
+  Copyright (c) 2025, Hubeidata
+  https://github.com/hubeidata/openob
+
+Licencia: BSD 3-Clause
+
+Manual creado: 2 de octubre de 2025
+Configuración para: Encoder(192.168.18.16) -> Repeater(192.168.15.34) -> Decoder(192.168.18.35)
+
+================================================================================
+FIN DEL MANUAL
+================================================================================

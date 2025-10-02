@@ -1,0 +1,129 @@
+================================================================================
+CORRECCIONES APLICADAS - SCRIPTS DE INICIO
+================================================================================
+Fecha: 2 de octubre de 2025
+================================================================================
+
+PROBLEMA DETECTADO:
+-------------------
+1. Los scripts no funcionaban con sudo
+2. El archivo /home/server/openob/bin/openob no tenía permisos de ejecución
+3. El modo repeater no acepta el argumento -v (verbose)
+
+SOLUCIONES APLICADAS:
+----------------------
+
+1. ✅ Permisos de ejecución agregados:
+   chmod +x /home/server/openob/bin/openob
+
+2. ✅ Protección contra uso de sudo agregada:
+   - start-repeater.sh
+   - start-encoder.sh
+   - start-decoder.sh
+   
+   Ahora detectan si se ejecutan con sudo y muestran error
+
+3. ✅ Argumento -v eliminado de los scripts:
+   - start-repeater.sh
+   - start-encoder.sh
+   - start-decoder.sh
+   
+   El modo repeater y los modos tx/rx de OpenOB no soportan -v
+
+================================================================================
+USO CORRECTO:
+================================================================================
+
+❌ INCORRECTO:
+   sudo ./start-repeater.sh
+
+✅ CORRECTO:
+   ./start-repeater.sh
+
+Los scripts ya usan 'sg audio -c' internamente para permisos de audio.
+
+================================================================================
+SCRIPTS ACTUALIZADOS:
+================================================================================
+
+1. start-repeater.sh
+   ✓ Verificación de sudo agregada
+   ✓ -v eliminado
+   ✓ Usa exec para mejor control del proceso
+
+2. start-encoder.sh
+   ✓ Verificación de sudo agregada
+   ✓ -v eliminado
+   ✓ Acepta bitrate como parámetro: ./start-encoder.sh 128
+
+3. start-decoder.sh
+   ✓ Verificación de sudo agregada
+   ✓ -v eliminado
+   ✓ Activa volumen automáticamente
+
+4. stop-all.sh
+   ✓ Sin cambios necesarios
+
+================================================================================
+VERIFICACIÓN:
+================================================================================
+
+✅ El repeater ahora inicia correctamente:
+   ./start-repeater.sh
+   
+   Salida esperada:
+   === Iniciando OpenOB Repeater ===
+   IP: 192.168.15.34
+   Puerto: 5004
+   Jitter buffer: 30ms
+   Presiona Ctrl+C para detener
+   
+   2025-10-02 XX:XX:XX,XXX - openob.link.transmission.config - INFO - Connecting to configuration host 192.168.15.34
+
+El proceso quedará esperando hasta que:
+1. Redis esté disponible en 192.168.15.34
+2. Los otros nodos (encoder/decoder) se conecten
+
+================================================================================
+PRÓXIMO PASO:
+================================================================================
+
+Para completar la configuración:
+
+1. Asegúrate de que Redis esté ejecutándose en 192.168.15.34:
+   sudo systemctl start redis-server
+   
+2. Configura Redis para aceptar conexiones externas:
+   sudo nano /etc/redis/redis.conf
+   # Cambiar: bind 127.0.0.1 ::1
+   # Por: bind 0.0.0.0 o bind 192.168.15.34
+   sudo systemctl restart redis-server
+
+3. Verifica la conexión a Redis:
+   redis-cli -h 192.168.15.34 ping
+
+4. Una vez Redis esté disponible, el repeater completará su inicio
+
+================================================================================
+COMANDOS DE REFERENCIA:
+================================================================================
+
+# Iniciar repeater (en 192.168.15.34):
+./start-repeater.sh
+
+# Iniciar encoder (en 192.168.18.16):
+./start-encoder.sh 128
+
+# Iniciar decoder (en 192.168.18.35):
+./start-decoder.sh
+
+# Detener todo:
+./stop-all.sh
+
+# Ver procesos:
+ps aux | grep openob
+
+# Verificar Redis:
+redis-cli -h 192.168.15.34 ping
+
+================================================================================

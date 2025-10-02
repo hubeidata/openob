@@ -1,0 +1,271 @@
+================================================================================
+RESUMEN DE CAMBIOS - OPENOB MODO REPETIDOR
+================================================================================
+Fecha: 2 de octubre de 2025
+Usuario: server
+Sistema: Ubuntu Server
+================================================================================
+
+✅ TAREAS COMPLETADAS:
+
+1. ✅ Eliminación del repositorio anterior
+   - Carpeta /home/server/openob eliminada
+   - Backup de archivos importantes realizado
+
+2. ✅ Clonación del nuevo repositorio
+   - Fuente: https://github.com/hubeidata/openob.git
+   - Ubicación: /home/server/openob
+   - Características: Incluye modo repeater
+
+3. ✅ Instalación de OpenOB
+   - Versión: 4.0.3
+   - Método: pip3 install --break-system-packages -e .
+   - Dependencia Redis: 6.4.0 (ya instalada)
+
+4. ✅ Fix de compatibilidad Redis aplicado
+   - Archivo: /home/server/openob/openob/link_config.py
+   - Línea 30 modificada:
+     ANTES: redis.StrictRedis(host=..., charset="utf-8", decode_responses=True)
+     AHORA: redis.StrictRedis(host=..., decode_responses=True)
+   - Motivo: Redis 6.4.0+ no acepta parámetro 'charset'
+
+5. ✅ Configuración de audio restaurada
+   - Archivo ~/.asoundrc configurado para hw:0,0
+   - Usuario agregado al grupo 'audio'
+   - Volumen Master activado (unmute)
+
+================================================================================
+ARCHIVOS CREADOS:
+================================================================================
+
+📄 Documentación:
+   ├── MANUAL_REPETIDOR.txt      (21 KB) - Manual completo del modo repetidor
+   ├── GUIA_RAPIDA.txt           (6.5 KB) - Referencia rápida de comandos
+   └── Este archivo              - Resumen de cambios
+
+🔧 Scripts de automatización:
+   ├── start-repeater.sh         - Inicia el servidor repetidor
+   ├── start-encoder.sh          - Inicia el encoder (captura audio)
+   ├── start-decoder.sh          - Inicia el decoder (reproduce audio)
+   ├── stop-all.sh               - Detiene todos los procesos
+   └── setup_ec2_repeater.sh     - Instalación automática en EC2 (original)
+
+Todos los scripts son ejecutables (chmod +x aplicado)
+
+================================================================================
+CONFIGURACIÓN DEL SISTEMA:
+================================================================================
+
+Arquitectura del sistema:
+┌──────────────────┐         ┌──────────────────┐         ┌──────────────────┐
+│   ENCODER        │────────▶│   REPEATER       │────────▶│   DECODER        │
+│  192.168.18.16   │ (RTP)   │  192.168.15.34   │ (RTP)   │  192.168.18.35   │
+│  Captura audio   │         │  Passthrough     │         │  Reproduce       │
+└──────────────────┘         └──────────────────┘         └──────────────────┘
+      LOCAL                     SERVIDOR                        LOCAL
+
+Componentes:
+- Redis Server: 192.168.15.34:6379 (coordinación)
+- Puerto RTP: 5004 (configurable)
+- Codec: Opus 128kbps (recomendado)
+- Jitter buffer: 30-60ms
+
+================================================================================
+CARACTERÍSTICAS DEL MODO REPETIDOR:
+================================================================================
+
+✨ Ventajas:
+   • Latencia baja: +10-40ms adicionales
+   • Sin procesamiento: Passthrough de paquetes RTP
+   • NAT-friendly: No requiere port forwarding en routers locales
+   • Eficiente: Mínimo uso de CPU en el servidor
+   • Automático: Registro de peers automático
+
+🎯 Casos de uso:
+   • Transmisión de radio por Internet
+   • Enlaces punto a punto sobre NAT/firewall
+   • Broadcasting desde ubicaciones remotas
+   • Redundancia de enlaces
+
+================================================================================
+USO RÁPIDO:
+================================================================================
+
+1. En el REPEATER (192.168.15.34):
+   ./start-repeater.sh
+
+2. En el ENCODER (192.168.18.16):
+   ./start-encoder.sh 128    # 128 kbps
+
+3. En el DECODER (192.168.18.35):
+   ./start-decoder.sh
+
+4. Para detener:
+   ./stop-all.sh
+
+================================================================================
+COMANDOS MANUALES (sin scripts):
+================================================================================
+
+REPEATER:
+sg audio -c "openob 192.168.15.34 repeater transmission repeater -p 5004 -j 30"
+
+ENCODER:
+sg audio -c "openob 192.168.15.34 encoder transmission tx 192.168.15.34 \
+  -e opus -b 128 -r 48000 -j 60 -a alsa -d plughw:0 -p 5004"
+
+DECODER:
+sg audio -c "openob 192.168.15.34 decoder transmission rx -a alsa -d plughw:0"
+
+Nota: Se requiere 'sg audio -c' para permisos de audio
+
+================================================================================
+VERIFICACIÓN:
+================================================================================
+
+1. Verificar que Redis está ejecutándose:
+   redis-cli -h 192.168.15.34 ping
+   Respuesta esperada: PONG
+
+2. Verificar puerto RTP:
+   sudo netstat -tulnp | grep 5004
+
+3. Verificar volumen:
+   sg audio -c "amixer sget Master"
+   Debe estar [on] y con volumen >0%
+
+4. Verificar dispositivos de audio:
+   cat /proc/asound/pcm
+   aplay -l
+
+================================================================================
+CAMBIOS EN CÓDIGO:
+================================================================================
+
+Archivo: /home/server/openob/openob/link_config.py
+
+Línea 30 (modificada):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ANTES:
+self.redis = redis.StrictRedis(host=self.redis_host, 
+                                charset="utf-8", 
+                                decode_responses=True)
+
+DESPUÉS:
+self.redis = redis.StrictRedis(host=self.redis_host, 
+                                decode_responses=True)
+
+Motivo:
+- La biblioteca redis-py 6.4.0+ eliminó el parámetro 'charset'
+- El parámetro 'decode_responses=True' ya maneja UTF-8 automáticamente
+- Este cambio es necesario para evitar el error:
+  "Redis.__init__() got an unexpected keyword argument 'charset'"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+================================================================================
+REQUISITOS DEL SISTEMA:
+================================================================================
+
+Software instalado:
+✓ Python 3.13.3
+✓ pip3 (25.0+dfsg-1ubuntu0.2)
+✓ redis-py 6.4.0
+✓ Redis Server 7.0.15
+✓ GStreamer 1.26.0
+✓ python3-gst-1.0 (bindings Python para GStreamer)
+✓ Plugins GStreamer (base, good, bad, ugly)
+✓ ALSA (Advanced Linux Sound Architecture)
+
+Grupos de usuario:
+✓ Usuario 'server' agregado al grupo 'audio'
+
+Configuración de red:
+✓ Conectividad entre las 3 IPs verificada
+✓ Puerto 6379 (Redis) debe estar abierto en 192.168.15.34
+✓ Puerto 5004 (RTP) debe estar abierto en 192.168.15.34
+
+================================================================================
+PRÓXIMOS PASOS:
+================================================================================
+
+Para usar el sistema:
+
+1. Asegúrate de que Redis esté ejecutándose en 192.168.15.34:
+   sudo systemctl start redis-server
+   sudo systemctl enable redis-server
+
+2. Configura el firewall en el repetidor (192.168.15.34):
+   sudo ufw allow 6379/tcp  # Redis
+   sudo ufw allow 5004/udp  # RTP
+
+3. Inicia los componentes en este orden:
+   a. Repeater (192.168.15.34)
+   b. Encoder (192.168.18.16)
+   c. Decoder (192.168.18.35)
+
+4. Para producción, considera:
+   - Crear servicio systemd para el repeater
+   - Configurar contraseña en Redis
+   - Limitar acceso a Redis por IP
+   - Implementar monitoreo y alertas
+   - Configurar VPN para seguridad adicional
+
+================================================================================
+DOCUMENTACIÓN:
+================================================================================
+
+Consulta estos archivos para más información:
+
+📖 Guías en /home/server/openob/:
+   - MANUAL_REPETIDOR.txt     : Documentación completa (este servidor)
+   - GUIA_RAPIDA.txt          : Referencia rápida de comandos
+   - README_REPEATER.md       : Información del modo repeater
+   - REPEATER_MODE.md         : Documentación técnica detallada
+   - EXAMPLES.md              : Ejemplos de uso
+   - GETTING_STARTED.md       : Guía de inicio rápido
+
+🌐 Repositorios:
+   - Original: https://github.com/JamesHarrison/openob
+   - Con repeater: https://github.com/hubeidata/openob
+
+================================================================================
+SOPORTE Y TROUBLESHOOTING:
+================================================================================
+
+Para problemas comunes, consulta la sección "SOLUCIÓN DE PROBLEMAS" en:
+- MANUAL_REPETIDOR.txt (página completa de troubleshooting)
+- GUIA_RAPIDA.txt (soluciones rápidas)
+
+Comandos útiles de diagnóstico:
+- Ver logs: journalctl -f
+- Redis ping: redis-cli -h 192.168.15.34 ping
+- Ver procesos: ps aux | grep openob
+- Ver puertos: sudo netstat -tulnp | grep -E '(5004|6379)'
+- Ver volumen: sg audio -c "amixer sget Master"
+
+================================================================================
+LICENCIA:
+================================================================================
+
+OpenOB Original:
+Copyright (c) 2018, James Harrison
+BSD 3-Clause License
+
+OpenOB con Modo Repeater:
+Copyright (c) 2025, Hubeidata
+BSD 3-Clause License
+
+================================================================================
+AUTOR:
+================================================================================
+
+Configuración realizada: 2 de octubre de 2025
+Sistema: Ubuntu Server
+Usuario: server
+Asistencia: GitHub Copilot
+
+================================================================================
+FIN DEL RESUMEN
+================================================================================
