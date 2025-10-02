@@ -27,7 +27,7 @@ class LinkConfig(object):
         self.redis = None
         while True:
             try:
-                self.redis = redis.StrictRedis(host=self.redis_host, charset="utf-8", decode_responses=True)
+                self.redis = redis.StrictRedis(host=self.redis_host, decode_responses=True)
                 self.redis.ping()
                 break
             except Exception as e:

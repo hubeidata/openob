@@ -38,6 +38,10 @@ class RTPRepeater(object):
         self.peers = {}  # {address: {'rtp_addr': (ip, port), 'rtcp_addr': (ip, port), 'last_seen': time}}
         self.peer_order = []  # Track order of peer registration
         
+        # Flags for one-time logging
+        self.encoder_detected = False
+        self.decoder_detected = False
+        
         # Port configuration
         self.rtp_port = self.link_config.port
         self.rtcp_port = self.rtp_port + 1
@@ -64,6 +68,9 @@ class RTPRepeater(object):
             # Schedule peer timeout check
             GLib.timeout_add_seconds(30, self.check_peer_timeouts)
             
+            # Schedule peer discovery from Redis
+            GLib.timeout_add_seconds(2, self.discover_peers_from_redis)
+            
             self.main_loop.run()
         except Exception as e:
             self.logger.exception('Encountered a problem in the MainLoop, tearing down the pipeline: %s' % e)
@@ -84,6 +91,85 @@ class RTPRepeater(object):
             del self.peers[peer_id]
             if peer_id in self.peer_order:
                 self.peer_order.remove(peer_id)
+        
+        return True  # Continue periodic check
+
+    def discover_peers_from_redis(self):
+        """
+        Discover new peers from Redis configuration
+        This checks for encoder and decoder nodes that have registered
+        """
+        try:
+            # Check for encoder (transmitter)
+            encoder_host = self.link_config.get('receiver_host')
+            encoder_port = self.link_config.get('port')
+            
+            if encoder_host and encoder_port and not self.encoder_detected:
+                self.encoder_detected = True
+                # Encoder is sending to us, we need to forward to decoder
+                self.logger.info('━' * 70)
+                self.logger.info('🎤 ENCODER DETECTED!')
+                self.logger.info('   Node: encoder')
+                self.logger.info('   RTP: %s:%s' % (encoder_host, encoder_port))
+                self.logger.info('━' * 70)
+            
+            # Check for decoder (receiver) - look for nodes in Redis
+            # The decoder will register itself when it starts
+            if not self.decoder_detected:
+                # Try to find decoder node information
+                # OpenOB stores node info with keys like: openob:transmission:recepteur
+                decoder_node = None
+                try:
+                    # Get all keys and look for decoder/recepteur nodes
+                    keys = self.link_config.redis.keys('openob:%s:*' % self.link_config.name)
+                    
+                    # Debug: log all keys to see what's available
+                    if keys:
+                        self.logger.debug('Redis keys found: %s' % [k.decode('utf-8') if isinstance(k, bytes) else k for k in keys])
+                    
+                    for key in keys:
+                        key_str = key.decode('utf-8') if isinstance(key, bytes) else key
+                        if 'recepteur' in key_str or 'decoder' in key_str or 'receiver' in key_str:
+                            # Check if this key has a :type suffix
+                            if key_str.endswith(':type'):
+                                node_type = self.link_config.redis.get(key_str)
+                                if node_type and (node_type == 'decoder' or node_type == b'decoder'):
+                                    # Found a decoder node - extract base key
+                                    base_key = key_str.replace(':type', '')
+                                    parts = base_key.split(':')
+                                    if len(parts) >= 3:
+                                        decoder_node = parts[2]
+                                        self.logger.debug('Found decoder node: %s' % decoder_node)
+                                        break
+                    
+                    if decoder_node:
+                        # Try to get decoder's listening address
+                        # Decoder listens on receiver_host:port
+                        decoder_key_prefix = 'openob:%s:%s' % (self.link_config.name, decoder_node)
+                        decoder_host = self.link_config.redis.get('%s:receiver_host' % decoder_key_prefix)
+                        decoder_port = self.link_config.redis.get('%s:port' % decoder_key_prefix)
+                        
+                        self.logger.debug('Decoder config - host: %s, port: %s' % (decoder_host, decoder_port))
+                        
+                        if decoder_host and decoder_port:
+                            if isinstance(decoder_host, bytes):
+                                decoder_host = decoder_host.decode('utf-8')
+                            if isinstance(decoder_port, bytes):
+                                decoder_port = decoder_port.decode('utf-8')
+                            
+                            self.decoder_detected = True
+                            self.register_peer('decoder', (decoder_host, int(decoder_port)))
+                            self.logger.info('━' * 70)
+                            self.logger.info('🔊 DECODER CONNECTED!')
+                            self.logger.info('   Node: %s' % decoder_node)
+                            self.logger.info('   RTP: %s:%s' % (decoder_host, decoder_port))
+                            self.logger.info('   Status: Forwarding audio')
+                            self.logger.info('━' * 70)
+                except Exception as e:
+                    self.logger.warning('Error checking for decoder: %s' % e)
+                
+        except Exception as e:
+            self.logger.debug('Error discovering peers: %s' % e)
         
         return True  # Continue periodic check
 

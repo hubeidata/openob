@@ -3,6 +3,7 @@ gi.require_version('Gst', '1.0')
 from gi.repository import Gst, GLib
 Gst.init(None)
 
+import socket
 from openob.logger import LoggerFactory
 
 class RTPReceiver(object):
@@ -12,12 +13,38 @@ class RTPReceiver(object):
     
         self.link_config = link_config
         self.audio_interface = audio_interface
+        self.node_name = node_name
 
         self.logger_factory = LoggerFactory()
         self.logger = self.logger_factory.getLogger('node.%s.link.%s.%s' % (node_name, self.link_config.name, self.audio_interface.mode))
         self.logger.info('Creating reception pipeline')
 
+        # Publish this decoder's IP to Redis for repeater discovery
+        self._publish_decoder_address()
+
         self.build_pipeline()
+
+    def _publish_decoder_address(self):
+        """Publish this decoder's IP address to Redis so the repeater can find it"""
+        try:
+            # Get local IP address (the one used to connect to Redis)
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                # Connect to Redis server to determine which local IP we're using
+                s.connect((self.link_config.redis_host, 6379))
+                local_ip = s.getsockname()[0]
+            finally:
+                s.close()
+            
+            # Publish to Redis with node name as key
+            key_prefix = 'openob:%s:%s' % (self.link_config.name, self.node_name)
+            self.link_config.redis.set('%s:receiver_host' % key_prefix, local_ip)
+            self.link_config.redis.set('%s:port' % key_prefix, str(self.link_config.port))
+            self.link_config.redis.set('%s:type' % key_prefix, 'decoder')
+            
+            self.logger.info('Published decoder address to Redis: %s:%s' % (local_ip, self.link_config.port))
+        except Exception as e:
+            self.logger.warning('Could not publish decoder address to Redis: %s' % e)
 
     def run(self):
         self.pipeline.set_state(Gst.State.PLAYING)
