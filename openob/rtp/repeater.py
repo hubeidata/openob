@@ -5,6 +5,7 @@ Gst.init(None)
 
 import socket
 import time
+import threading
 from openob.logger import LoggerFactory
 
 
@@ -42,6 +43,10 @@ class RTPRepeater(object):
         self.encoder_detected = False
         self.decoder_detected = False
         
+        # Packet counters for statistics
+        self.rtp_packet_count = 0
+        self.rtcp_packet_count = 0
+        
         # Port configuration
         self.rtp_port = self.link_config.port
         self.rtcp_port = self.rtp_port + 1
@@ -55,7 +60,10 @@ class RTPRepeater(object):
         # Clean up old peer registrations from Redis
         self._cleanup_old_peer_data()
         
-        self.build_pipeline()
+        # Running flag for threads
+        self.running = False
+        
+        self.build_sockets()
 
     def _cleanup_old_peer_data(self):
         """Clean up old peer registrations from previous sessions"""
@@ -64,11 +72,11 @@ class RTPRepeater(object):
             pattern = 'openob:%s:*' % self.link_config.name
             keys = self.link_config.redis.keys(pattern)
             
-            # Delete keys that look like peer registrations
+            # Check which keys have TTL (active peers) vs no TTL (stale data)
             deleted_count = 0
             for key in keys:
                 key_str = key.decode('utf-8') if isinstance(key, bytes) else key
-                # Delete keys with node names that have peer data
+                # Delete keys that look like peer registrations
                 if any(x in key_str for x in [':receiver_host', ':port', ':type']):
                     # Check if it's a peer key (has node name like recepteur, emetteur, etc)
                     parts = key_str.split(':')
@@ -80,19 +88,125 @@ class RTPRepeater(object):
                                                'jitter_buffer', 'multicast', 'opus_complexity',
                                                'opus_dtx', 'opus_fec', 'opus_framesize',
                                                'opus_loss_expectation']:
-                            self.link_config.redis.delete(key_str)
-                            deleted_count += 1
+                            # Check if key has TTL (active decoder)
+                            ttl = self.link_config.redis.ttl(key_str)
+                            if ttl == -1:  # No TTL = stale data from crashed process
+                                self.link_config.redis.delete(key_str)
+                                deleted_count += 1
+                            elif ttl > 0:
+                                # Active peer, keep it
+                                self.logger.info('Found active peer data: %s (TTL: %ds)' % (key_str, ttl))
             
             if deleted_count > 0:
-                self.logger.debug('Cleaned up %d old peer registration(s) from Redis' % deleted_count)
+                self.logger.info('Cleaned up %d stale peer registration(s) from Redis' % deleted_count)
         except Exception as e:
             self.logger.warning('Could not cleanup old peer data: %s' % e)
 
+    def build_sockets(self):
+        """Build UDP sockets for RTP/RTCP passthrough (pure Python, no GStreamer)"""
+        self.logger.info('Building UDP socket repeater (pure Python mode)')
+        
+        # RTP receive socket
+        self.rtp_recv_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.rtp_recv_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.rtp_recv_socket.bind(('0.0.0.0', self.rtp_port))
+        self.rtp_recv_socket.settimeout(0.1)  # 100ms timeout for clean shutdown
+        
+        # RTCP receive socket
+        self.rtcp_recv_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.rtcp_recv_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.rtcp_recv_socket.bind(('0.0.0.0', self.rtcp_port))
+        self.rtcp_recv_socket.settimeout(0.1)
+        
+        # RTP send socket
+        self.rtp_send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.rtp_send_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        
+        # RTCP send socket
+        self.rtcp_send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.rtcp_send_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        
+        self.logger.info('UDP sockets created: RTP=%d, RTCP=%d' % (self.rtp_port, self.rtcp_port))
+        self.logger.info('Ready to receive and forward packets')
+
     def run(self):
-        """Start the repeater pipeline"""
-        self.pipeline.set_state(Gst.State.PLAYING)
+        """Start the repeater (socket-based)"""
+        self.running = True
         self.logger.info('Repeater active - waiting for peers to connect')
         self.logger.info('Peers should send RTP to this host on port %d' % self.rtp_port)
+        
+        # Start receiver threads
+        self.rtp_thread = threading.Thread(target=self._rtp_receiver_thread, daemon=True)
+        self.rtcp_thread = threading.Thread(target=self._rtcp_receiver_thread, daemon=True)
+        
+        self.rtp_thread.start()
+        self.rtcp_thread.start()
+
+    def _rtp_receiver_thread(self):
+        """Thread that receives and forwards RTP packets"""
+        self.logger.info('RTP receiver thread started')
+        
+        while self.running:
+            try:
+                data, addr = self.rtp_recv_socket.recvfrom(2048)
+                
+                # Count packets
+                self.rtp_packet_count += 1
+                
+                # Detect encoder on first packet
+                if not self.encoder_detected:
+                    self.encoder_detected = True
+                    encoder_host = self.link_config.get('receiver_host')
+                    encoder_port = self.link_config.get('port')
+                    self.logger.info('━' * 70)
+                    self.logger.info('🎤 ENCODER DETECTED!')
+                    self.logger.info('   Receiving from: %s:%d' % addr)
+                    if encoder_host and encoder_port:
+                        self.logger.info('   Expected: %s:%s' % (encoder_host, encoder_port))
+                    self.logger.info('   Status: Active transmission')
+                    if len(self.peers) > 0:
+                        self.logger.info('   Forwarding to %d peer(s)' % len(self.peers))
+                        self.logger.info('   🔴 AUDIO STREAMING NOW!')
+                    else:
+                        self.logger.info('   ⚠️  No decoders registered yet')
+                    self.logger.info('━' * 70)
+                
+                # Log every 5000 packets (about every 100 seconds)
+                if self.rtp_packet_count % 5000 == 0:
+                    self.logger.info('📊 RTP: packet #%d, %d peer(s)' % (self.rtp_packet_count, len(self.peers)))
+                
+                # Forward to all peers
+                self.forward_rtp_to_peers(data)
+                
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self.running:
+                    self.logger.error('Error in RTP receiver: %s' % e)
+        
+        self.logger.info('RTP receiver thread stopped')
+
+    def _rtcp_receiver_thread(self):
+        """Thread that receives and forwards RTCP packets"""
+        self.logger.info('RTCP receiver thread started')
+        
+        while self.running:
+            try:
+                data, addr = self.rtcp_recv_socket.recvfrom(2048)
+                
+                # Count packets
+                self.rtcp_packet_count += 1
+                
+                # Forward to all peers
+                self.forward_rtcp_to_peers(data)
+                
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self.running:
+                    self.logger.error('Error in RTCP receiver: %s' % e)
+        
+        self.logger.info('RTCP receiver thread stopped')
 
     def loop(self):
         """Main loop for the repeater"""
@@ -186,6 +300,7 @@ class RTPRepeater(object):
                             self.logger.info('   RTP: %s:%s' % (decoder_host, decoder_port))
                             if self.encoder_detected:
                                 self.logger.info('   Status: Receiving audio from encoder')
+                                self.logger.info('   📡 Ready to forward packets')
                             else:
                                 self.logger.info('   Status: Waiting for encoder...')
                             self.logger.info('━' * 70)
@@ -224,6 +339,8 @@ class RTPRepeater(object):
         self.rtp_src.set_property('port', self.rtp_port)
         self.rtp_src.set_property('caps', Gst.Caps.from_string('application/x-rtp'))
         
+        self.logger.info('UDP source configured on port %d' % self.rtp_port)
+        
         # App sink to capture packets and forward them
         self.rtp_sink = Gst.ElementFactory.make('appsink', 'rtp_sink')
         self.rtp_sink.set_property('emit-signals', True)
@@ -244,6 +361,54 @@ class RTPRepeater(object):
         # Create UDP socket for sending RTP packets
         self.rtp_send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.rtp_send_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    def on_rtp_probe(self, pad, info):
+        """Probe callback to detect RTP packets at udpsrc level and forward them"""
+        # Count packets
+        self.rtp_packet_count += 1
+        
+        # Detect encoder on first RTP packet received  
+        if not self.encoder_detected:
+            self.encoder_detected = True
+            encoder_host = self.link_config.get('receiver_host')
+            encoder_port = self.link_config.get('port')
+            self.logger.info('━' * 70)
+            self.logger.info('🎤 ENCODER DETECTED!')
+            self.logger.info('   Receiving RTP packets')
+            if encoder_host and encoder_port:
+                self.logger.info('   Expected from: %s:%s' % (encoder_host, encoder_port))
+            self.logger.info('   Status: Active transmission')
+            if len(self.peers) > 0:
+                self.logger.info('   Forwarding to %d peer(s): %s' % (len(self.peers), ', '.join(self.peers.keys())))
+                self.logger.info('   🔴 AUDIO STREAMING NOW!')
+            else:
+                self.logger.info('   ⚠️  No decoders registered yet')
+            self.logger.info('━' * 70)
+        
+        # Log every 100 packets for monitoring (roughly every 2 seconds)
+        if self.rtp_packet_count % 100 == 0:
+            self.logger.info('📊 Probe active: packet #%d, %d peer(s)' % (self.rtp_packet_count, len(self.peers)))
+        
+        # Get buffer and forward
+        probe_type = info.type
+        buffer = None
+        
+        if probe_type & Gst.PadProbeType.BUFFER:
+            buffer = info.get_buffer()
+        elif probe_type & Gst.PadProbeType.BUFFER_LIST:
+            # Handle buffer list
+            buffer_list = info.get_buffer_list()
+            if buffer_list and buffer_list.length() > 0:
+                buffer = buffer_list.get(0)
+        
+        if buffer:
+            success, map_info = buffer.map(Gst.MapFlags.READ)
+            if success:
+                packet_data = map_info.data
+                self.forward_rtp_to_peers(packet_data)
+                buffer.unmap(map_info)
+        
+        return Gst.PadProbeReturn.OK
 
     def build_rtcp_passthrough(self):
         """
@@ -277,6 +442,9 @@ class RTPRepeater(object):
         """Handle incoming RTP packet and forward to other peers"""
         sample = appsink.emit('pull-sample')
         if sample:
+            # Count packets
+            self.rtp_packet_count += 1
+            
             # Detect encoder on first RTP packet received
             if not self.encoder_detected:
                 self.encoder_detected = True
@@ -294,6 +462,10 @@ class RTPRepeater(object):
                 else:
                     self.logger.info('   ⚠️  No decoders registered yet')
                 self.logger.info('━' * 70)
+            
+            # Log every 100 packets
+            if self.rtp_packet_count % 100 == 0:
+                self.logger.info('📊 Packet #%d received, %d peer(s)' % (self.rtp_packet_count, len(self.peers)))
             
             buffer = sample.get_buffer()
             
@@ -356,18 +528,67 @@ class RTPRepeater(object):
 
     def forward_rtp_to_peers(self, packet_data):
         """Forward RTP packet to all registered peers"""
+        # If no peers, nothing to do
+        if len(self.peers) == 0:
+            return
+            
+        # Log first successful forward
+        if not hasattr(self, '_first_forward_logged'):
+            self._first_forward_logged = True
+            self._forward_count = 0
+            self.logger.info('━' * 70)
+            self.logger.info('📡 STARTING RTP FORWARDING')
+            self.logger.info('   Packets/second: ~%d (48kHz stereo PCM)' % (48000 / 960))  # Approx for 20ms frames
+            self.logger.info('   Forwarding to %d peer(s):' % len(self.peers))
+            for peer_id, peer_info in self.peers.items():
+                # Handle both old rtp_addr format and new host/port format
+                if 'rtp_addr' in peer_info:
+                    rtp_host, rtp_port = peer_info['rtp_addr']
+                else:
+                    rtp_host = peer_info['host']
+                    rtp_port = peer_info['port']
+                self.logger.info('   → %s at %s:%d' % (peer_id, rtp_host, rtp_port))
+            self.logger.info('   🔴 AUDIO FLOWING!')
+            self.logger.info('━' * 70)
+        
+        self._forward_count = getattr(self, '_forward_count', 0) + 1
+        
+        # Log every 50000 forwards (roughly every 1000 seconds / 16 minutes)
+        if self._forward_count % 50000 == 0:
+            self.logger.info('📊 Stats: Forwarded %d RTP packets to %d peer(s)' % (self._forward_count, len(self.peers)))
+        
         for peer_id, peer_info in self.peers.items():
             try:
-                rtp_addr = peer_info['rtp_addr']
-                self.rtp_send_socket.sendto(packet_data, rtp_addr)
+                # Handle both old rtp_addr format and new host/port format
+                if 'rtp_addr' in peer_info:
+                    rtp_addr = peer_info['rtp_addr']
+                else:
+                    rtp_addr = (peer_info['host'], peer_info['port'])
+                
+                bytes_sent = self.rtp_send_socket.sendto(packet_data, rtp_addr)
+                # Update last_seen
+                peer_info['last_seen'] = time.time()
             except Exception as e:
                 self.logger.error('Failed to forward RTP to peer %s: %s' % (peer_id, e))
 
     def forward_rtcp_to_peers(self, packet_data):
         """Forward RTCP packet to all registered peers"""
+        if len(self.peers) == 0:
+            return
+            
+        # Log first forward for debugging
+        if not hasattr(self, '_first_rtcp_forward_logged'):
+            self._first_rtcp_forward_logged = True
+            self.logger.info('Starting to forward RTCP packets to %d peer(s)' % len(self.peers))
+        
         for peer_id, peer_info in self.peers.items():
             try:
-                rtcp_addr = peer_info['rtcp_addr']
+                # Handle both old rtcp_addr format and new host/port format
+                if 'rtcp_addr' in peer_info:
+                    rtcp_addr = peer_info['rtcp_addr']
+                else:
+                    rtcp_addr = (peer_info['host'], peer_info['port'] + 1)
+                
                 self.rtcp_send_socket.sendto(packet_data, rtcp_addr)
             except Exception as e:
                 self.logger.error('Failed to forward RTCP to peer %s: %s' % (peer_id, e))
@@ -393,6 +614,14 @@ class RTPRepeater(object):
                 old_state, new_state, pending_state = message.parse_state_changed()
                 self.logger.debug('Pipeline state changed from %s to %s' % 
                                 (old_state.value_nick, new_state.value_nick))
+                # Log when pipeline reaches PLAYING state
+                if new_state == Gst.State.PLAYING:
+                    self.logger.info('Pipeline is now PLAYING - ready to receive packets')
+        elif t == Gst.MessageType.ELEMENT:
+            # Log element messages for debugging
+            struct = message.get_structure()
+            if struct:
+                self.logger.debug('Element message: %s' % struct.to_string())
 
     def get_stats(self):
         """Return statistics about the repeater"""
