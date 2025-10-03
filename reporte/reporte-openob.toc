@@ -1,0 +1,56 @@
+\babel@toc {spanish}{}\relax 
+\contentsline {section}{Resumen Ejecutivo}{5}{Doc-Start}%
+\contentsline {section}{\numberline {1}Introducción}{6}{section.1}%
+\contentsline {subsection}{\numberline {1.1}Contexto del Proyecto}{6}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}Objetivos}{6}{subsection.1.2}%
+\contentsline {subsection}{\numberline {1.3}Alcance}{6}{subsection.1.3}%
+\contentsline {section}{\numberline {2}Marco Teórico}{7}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Protocolo RTP (Real-time Transport Protocol)}{7}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Protocolo RTCP (RTP Control Protocol)}{7}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Redis como Sistema de Coordinación}{7}{subsection.2.3}%
+\contentsline {subsection}{\numberline {2.4}Audio PCM (Pulse Code Modulation)}{7}{subsection.2.4}%
+\contentsline {section}{\numberline {3}Arquitectura del Sistema}{8}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Topología de Red}{8}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Componentes Principales}{8}{subsection.3.2}%
+\contentsline {subsubsection}{\numberline {3.2.1}Encoder (Transmisor)}{8}{subsubsection.3.2.1}%
+\contentsline {subsubsection}{\numberline {3.2.2}Repeater (Repetidor)}{8}{subsubsection.3.2.2}%
+\contentsline {subsubsection}{\numberline {3.2.3}Decoder (Receptor)}{9}{subsubsection.3.2.3}%
+\contentsline {subsection}{\numberline {3.3}Flujo de Datos}{9}{subsection.3.3}%
+\contentsline {section}{\numberline {4}Implementación}{10}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Tecnologías Utilizadas}{10}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Módulo Principal: repeater.py}{10}{subsection.4.2}%
+\contentsline {subsubsection}{\numberline {4.2.1}Creación de Sockets UDP}{10}{subsubsection.4.2.1}%
+\contentsline {subsubsection}{\numberline {4.2.2}Thread de Recepción RTP}{11}{subsubsection.4.2.2}%
+\contentsline {subsubsection}{\numberline {4.2.3}Reenvío a Peers}{11}{subsubsection.4.2.3}%
+\contentsline {subsection}{\numberline {4.3}Auto-Registro del Decoder}{12}{subsection.4.3}%
+\contentsline {section}{\numberline {5}Resultados}{13}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Métricas de Rendimiento}{13}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Pruebas de Estabilidad}{13}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Comparación: GStreamer vs UDP Sockets}{14}{subsection.5.3}%
+\contentsline {section}{\numberline {6}Documentación y Scripts}{15}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Documentación Generada}{15}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Scripts de Automatización}{15}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Ejemplo de Script: start-repeater.sh}{15}{subsection.6.3}%
+\contentsline {section}{\numberline {7}Monitoreo y Diagnóstico}{17}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Herramientas de Monitoreo}{17}{subsection.7.1}%
+\contentsline {subsubsection}{\numberline {7.1.1}iftop - Monitoreo de Tráfico}{17}{subsubsection.7.1.1}%
+\contentsline {subsubsection}{\numberline {7.1.2}tcpdump - Captura de Paquetes}{17}{subsubsection.7.1.2}%
+\contentsline {subsubsection}{\numberline {7.1.3}Script de Verificación Automática}{17}{subsubsection.7.1.3}%
+\contentsline {subsection}{\numberline {7.2}Logs del Sistema}{17}{subsection.7.2}%
+\contentsline {section}{\numberline {8}Problemas Encontrados y Soluciones}{19}{section.8}%
+\contentsline {subsection}{\numberline {8.1}Problema 1: Incompatibilidad Redis}{19}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}Problema 2: Permisos de Audio}{19}{subsection.8.2}%
+\contentsline {subsection}{\numberline {8.3}Problema 3: Callback GStreamer No Ejecuta}{19}{subsection.8.3}%
+\contentsline {section}{\numberline {9}Conclusiones}{20}{section.9}%
+\contentsline {subsection}{\numberline {9.1}Logros del Proyecto}{20}{subsection.9.1}%
+\contentsline {subsection}{\numberline {9.2}Innovaciones Técnicas}{20}{subsection.9.2}%
+\contentsline {subsection}{\numberline {9.3}Aplicaciones Prácticas}{20}{subsection.9.3}%
+\contentsline {subsection}{\numberline {9.4}Trabajo Futuro}{21}{subsection.9.4}%
+\contentsline {section}{\numberline {10}Referencias}{22}{section.10}%
+\contentsline {section}{\numberline {A}Anexo A: Comandos Útiles}{23}{appendix.Alph1}%
+\contentsline {subsection}{\numberline {A.1}Inicio del Sistema}{23}{subsection.Alph1.1}%
+\contentsline {subsection}{\numberline {A.2}Monitoreo}{23}{subsection.Alph1.2}%
+\contentsline {subsection}{\numberline {A.3}Debugging}{23}{subsection.Alph1.3}%
+\contentsline {section}{\numberline {B}Anexo B: Estructura del Proyecto}{23}{appendix.Alph2}%
+\contentsline {section}{\numberline {C}Anexo C: Especificaciones Técnicas}{25}{appendix.Alph3}%
+\contentsline {section}{Agradecimientos}{26}{table.caption.8}%
