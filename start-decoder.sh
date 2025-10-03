@@ -24,4 +24,4 @@ sg audio -c "amixer set Speaker unmute" > /dev/null 2>&1
 echo "✓ Volumen activado"
 echo ""
 
-exec sg audio -c "/home/server/openob/bin/openob $REPEATER_IP decoder transmission rx -a alsa -d plughw:0"
+exec sg audio -c "/home/pi/openob/bin/openob $REPEATER_IP decoder transmission rx -a alsa -d hw:1,0"

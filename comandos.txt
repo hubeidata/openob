@@ -1,0 +1,5 @@
+clonado de repositorio:
+git clone https://github.com/hubeidata/openob
+cd openob
+pip3 install -e .
+sudo apt install -y python3 python-is-python3
