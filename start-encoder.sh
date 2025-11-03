@@ -23,3 +23,4 @@ if [ "$EUID" -eq 0 ]; then
 fi
 
 exec sg audio -c "/home/server/openob/bin/openob $REPEATER_IP encoder transmission tx $REPEATER_IP -e opus -b $BITRATE -r 48000 -j 60 -a alsa -d plughw:0 -p 5004"
+#openob 192.168.18.34 emetteur transmission tx 192.168.18.34 -e pcm -r 48000 -j 60 -a alsa -d hw:0,0 -p 5004
