@@ -21,6 +21,17 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Asegurar que exista el grupo 'audio' y añadir el usuario 'ubuntu' (idempotente)
+echo -e "${GREEN}[0/6] Configurando grupo 'audio' para el usuario ubuntu...${NC}"
+# Crear el grupo si no existe (no falla si ya existe)
+groupadd -f audio || true
+# Añadir ubuntu al grupo audio si no está ya
+if id -nG ubuntu 2>/dev/null | grep -qw audio; then
+    echo "Usuario 'ubuntu' ya es miembro del grupo 'audio'."
+else
+    usermod -aG audio ubuntu && echo "Usuario 'ubuntu' añadido al grupo 'audio'."
+fi
+
 echo -e "${GREEN}[1/6] Actualizando sistema...${NC}"
 apt-get update -qq
 apt-get upgrade -y -qq
@@ -62,25 +73,36 @@ echo -e "${YELLOW}Guarda esta contraseña en un lugar seguro.${NC}"
 echo "${REDIS_PASSWORD}" > /root/redis_password.txt
 chmod 600 /root/redis_password.txt
 
-echo -e "${GREEN}[5/6] Instalando OpenOB...${NC}"
-# Opción 1: desde PyPI (si está disponible)
-# pip3 install openob
-
-# Opción 2: desde source (desarrollo)
-if [ ! -d "/opt/openob" ]; then
-    cd /opt
-    git clone https://github.com/JamesHarrison/openob.git || \
-    git clone https://github.com/hubeidata/openob.git  # Fork alternativo
-    cd openob
-    pip3 install -e .
+echo -e "${GREEN}[5/6] Instalando OpenOB desde el árbol local si existe...${NC}"
+# Si el repositorio ya está clonado en /home/ubuntu/openob, instalar en modo editable
+if [ -d "/home/ubuntu/openob" ]; then
+    echo -e "${GREEN}Instalando desde /home/ubuntu/openob (editable)...${NC}"
+    # Intentar instalar en modo editable; si falla (PEP 668) no abortar, seguimos usando el árbol local
+    if ! pip3 install -e /home/ubuntu/openob; then
+        echo -e "${YELLOW}pip install -e falló (entorno gestionado) — continuando y usando el ejecutable local.${NC}"
+    fi
+    # Asegurar que el ejecutable local sea ejecutable
+    chmod +x /home/ubuntu/openob/bin/openob || true
 else
-    echo "OpenOB ya está instalado en /opt/openob"
+    echo -e "${YELLOW}Directorio /home/ubuntu/openob no encontrado. Intentando instalar desde PyPI...${NC}"
+    pip3 install openob || true
 fi
+
 
 echo -e "${GREEN}[6/6] Creando servicio systemd...${NC}"
 
 # Obtener IP pública de la instancia EC2
-PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || true)
+# Fallbacks si no hay IP pública (instancia sin IP pública)
+if [ -z "${PUBLIC_IP}" ]; then
+    PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4 || true)
+fi
+if [ -z "${PUBLIC_IP}" ]; then
+    PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+fi
+if [ -z "${PUBLIC_IP}" ]; then
+    PUBLIC_IP=127.0.0.1
+fi
 
 cat > /etc/systemd/system/openob-repeater.service << EOF
 [Unit]
@@ -91,9 +113,13 @@ Wants=redis.service
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/home/ubuntu
+# Ejecutar desde el árbol local del repositorio
+WorkingDirectory=/home/ubuntu/openob
+# Variables de entorno para el servicio
 Environment="GST_DEBUG=2"
-ExecStart=/usr/local/bin/openob ${PUBLIC_IP} ec2-repeater transmission repeater -p 5004 -j 30
+Environment="PYTHONPATH=/home/ubuntu/openob"
+# Usar el ejecutable del árbol local (bin/openob)
+ExecStart=/usr/bin/env python3 /home/ubuntu/openob/bin/openob ${PUBLIC_IP} ec2-repeater transmission repeater -p 5004 -j 30
 Restart=always
 RestartSec=10
 StandardOutput=journal

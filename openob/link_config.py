@@ -1,4 +1,5 @@
 import redis
+import os
 import time
 from openob.logger import LoggerFactory
 
@@ -27,7 +28,12 @@ class LinkConfig(object):
         self.redis = None
         while True:
             try:
-                self.redis = redis.StrictRedis(host=self.redis_host, decode_responses=True)
+                # Support authenticated Redis by reading password from env
+                redis_password = os.environ.get('REDIS_PASSWORD') or os.environ.get('REDIS_PASS')
+                if redis_password:
+                    self.redis = redis.StrictRedis(host=self.redis_host, password=redis_password, decode_responses=True)
+                else:
+                    self.redis = redis.StrictRedis(host=self.redis_host, decode_responses=True)
                 self.redis.ping()
                 break
             except Exception as e:
