@@ -85,7 +85,7 @@ if [ -f /root/redis_password.txt ]; then
 else
   # crear plantilla vacía (modo 600)
   if [ ! -f /etc/openob/redis.env ]; then
-    echo "# REDIS_PASSWORD=<coloca_aqui_la_contraseña>" > /etc/openob/redis.env
+    echo "REDIS_PASSWORD=zYWDZxDNBqSogfpurKx6CemmbAgJCTYBLcj/qPrsS7Y=" > /etc/openob/redis.env
     chmod 600 /etc/openob/redis.env
     chown root:root /etc/openob/redis.env
     echo "Plantilla /etc/openob/redis.env creada. Añade la contraseña para systemd."
