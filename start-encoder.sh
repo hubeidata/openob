@@ -18,10 +18,12 @@ echo ""
 
 
 # Determinar ejecutable openob en el árbol local
-OPENOB_BIN="/etc/openob/bin/openob"
 
-CMD="$CMD $OPENOB_BIN $REPEATER_HOST encoder transmission tx $REPEATER_HOST -e opus -b $BITRATE -r 48000 -j 60 -a alsa -d plughw:0 -p 5004"
+
+CMD="$CMD openob $REPEATER_HOST encoder transmission tx $REPEATER_HOST -e opus -b $BITRATE -r 48000 -j 60 -a alsa -d plughw:0 -p 5004"
 
 echo "Ejecutando: $CMD"
 exec sg audio -c "$CMD"
 #openob 192.168.18.34 emetteur transmission tx 192.168.18.34 -e pcm -r 48000 -j 60 -a alsa -d hw:0,0 -p 5004
+
+

@@ -1,9 +1,29 @@
+#desinstalar openob
+sudo pip3 uninstall OpenOB
 clonado de repositorio:
 git clone https://github.com/hubeidata/openob
 cd openob
-pip3 install -e .
+pip3 install -e . --break-system-packages
 sudo apt install -y python3 python-is-python3
 
- sudo ln -sf "/etc/openob/bin/openob" /usr/local/bin/openob
+ sudo ln -sf "/home/pi/openob/bin/openob" /usr/local/bin/openob
 
- 
+
+
+redis passowrd:
+sudo nano /etc/profile.d/redis_password.sh
+export REDIS_PASSWORD="zYWDZxDNBqSogfpurKx6CemmbAgJCTYBLcj/qPrsS7Y="
+
+sudo chmod +x /etc/profile.d/redis_password.sh
+source /etc/profile.d/redis_password.sh
+echo $REDIS_PASSWORD
+
+REPETER
+openob enlace.maxtelperu.com ec2-repeater transmission repeater -p 5004 -j 30
+
+ENCODER
+openob enlace.maxtelperu.com encoder transmission tx 192.168.18.37 -e opus -b 128 -r 48000 -j 60 -a alsa -d plughw:1 -p 5004
+openob enlace.maxtelperu.com encoder transmission tx enlace.maxtelperu.com -e opus -b 128 -r 48000 -j 60 -a alsa -d plughw:1 -p 5004
+
+DECODER
+openob enlace.maxtelperu.com decoder transmission rx -a alsa -d plughw:1
