@@ -56,7 +56,30 @@ class RTPReceiver(object):
             # the decoder's public endpoint (works behind NAT without port-forwarding).
             try:
                 # Create a lightweight UDP socket for registration packets
+                # Bind it to the receiver port so outgoing packets use the same
+                # source port that GStreamer listens on. This makes NAT mapping
+                # work: the repeater will see the public endpoint matching the
+                # local RTP port (typically 5004) and can forward RTP to it.
                 self._reg_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                # Allow reusing the address/port (bind before GStreamer binds)
+                try:
+                    self._reg_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                except Exception:
+                    pass
+                # Try to set SO_REUSEPORT where available (improves multi-bind behavior)
+                try:
+                    self._reg_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                except Exception:
+                    pass
+
+                # Bind to the same port we will listen on for RTP so NAT mapping
+                # uses that port as the external port.
+                try:
+                    self._reg_socket.bind(('0.0.0.0', int(self.link_config.port)))
+                except Exception as e:
+                    # If bind fails, fall back to an unbound socket (ephemeral port)
+                    self.logger.debug('Could not bind registration socket to port %s: %s' % (self.link_config.port, e))
+
                 # Non-blocking and short timeout
                 self._reg_socket.settimeout(0.5)
 
