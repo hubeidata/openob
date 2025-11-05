@@ -171,6 +171,32 @@ class RTPRepeater(object):
                         self.logger.info('   ⚠️  No decoders registered yet')
                     self.logger.info('━' * 70)
                 
+                # If this is a registration/keepalive packet from a decoder,
+                # register the source address as a peer. This allows decoders
+                # behind NAT to send a small UDP packet to the repeater so the
+                # repeater learns their public endpoint and can forward audio
+                # to them without requiring port-forwarding on the decoder side.
+                try:
+                    # Accept ASCII registration messages like: OPENOB_REGISTER:<node_name>
+                    if isinstance(data, (bytes, bytearray)) and data.startswith(b'OPENOB_REGISTER:'):
+                        try:
+                            body = data.decode('utf-8', errors='ignore')
+                            parts = body.split(':', 1)
+                            peer_name = parts[1] if len(parts) > 1 and parts[1] else '%s:%d' % (addr[0], addr[1])
+                        except Exception:
+                            peer_name = '%s:%d' % (addr[0], addr[1])
+
+                        # Register or refresh this peer
+                        self.register_peer(peer_name, (addr[0], addr[1]))
+                        # Update last_seen timestamp
+                        if peer_name in self.peers:
+                            self.peers[peer_name]['last_seen'] = time.time()
+                            self.logger.info('Registered/Refreshed peer from registration: %s (%s:%d)' % (peer_name, addr[0], addr[1]))
+                        # Do not treat registration packets as RTP payload
+                        continue
+                except Exception as e:
+                    self.logger.debug('Error handling registration packet: %s' % e)
+
                 # Log every 5000 packets (about every 100 seconds)
                 if self.rtp_packet_count % 5000 == 0:
                     self.logger.info('📊 RTP: packet #%d, %d peer(s)' % (self.rtp_packet_count, len(self.peers)))

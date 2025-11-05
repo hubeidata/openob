@@ -22,7 +22,7 @@ REPETER
 openob enlace.maxtelperu.com ec2-repeater transmission repeater -p 5004 -j 30
 
 ENCODER
-openob enlace.maxtelperu.com encoder transmission tx 192.168.18.37 -e opus -b 128 -r 48000 -j 60 -a alsa -d plughw:1 -p 5004
+
 openob enlace.maxtelperu.com encoder transmission tx enlace.maxtelperu.com -e opus -b 128 -r 48000 -j 60 -a alsa -d plughw:1 -p 5004
 
 DECODER

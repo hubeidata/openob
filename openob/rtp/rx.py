@@ -51,6 +51,22 @@ class RTPReceiver(object):
             
             # Schedule periodic refresh of the registration
             GLib.timeout_add_seconds(30, self._refresh_decoder_registration, key_prefix, local_ip)
+            
+            # Also send a UDP registration/keepalive to the repeater so it can learn
+            # the decoder's public endpoint (works behind NAT without port-forwarding).
+            try:
+                # Create a lightweight UDP socket for registration packets
+                self._reg_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                # Non-blocking and short timeout
+                self._reg_socket.settimeout(0.5)
+
+                # Send an initial registration immediately
+                GLib.idle_add(self._send_registration)
+
+                # Schedule periodic registration every 20 seconds to keep NAT mapping
+                GLib.timeout_add_seconds(20, self._send_registration)
+            except Exception as e:
+                self.logger.debug('Could not create registration socket: %s' % e)
         except Exception as e:
             self.logger.warning('Could not publish decoder address to Redis: %s' % e)
 
@@ -71,6 +87,33 @@ class RTPReceiver(object):
     def run(self):
         self.pipeline.set_state(Gst.State.PLAYING)
         self.logger.info('Listening for stream on %s:%i' % (self.link_config.receiver_host, self.link_config.port))
+
+    def _send_registration(self):
+        """Send a small UDP registration packet to the repeater so it can
+        learn the decoder's external IP:port and start forwarding to it.
+
+        Returns True to keep the GLib timeout active.
+        """
+        try:
+            # Target is the configured receiver_host/port (usually the repeater)
+            target_host = self.link_config.get('receiver_host') or self.link_config.redis_host
+            target_port = int(self.link_config.get('port') or self.link_config.port)
+
+            # Build a simple registration message including node name
+            msg = ('OPENOB_REGISTER:%s' % self.node_name).encode('utf-8')
+
+            if hasattr(self, '_reg_socket') and self._reg_socket:
+                try:
+                    # Use sendto with hostname (will resolve)
+                    self._reg_socket.sendto(msg, (target_host, target_port))
+                    self.logger.debug('Sent registration to %s:%s' % (target_host, target_port))
+                except Exception as e:
+                    self.logger.debug('Failed to send registration packet: %s' % e)
+        except Exception as e:
+            self.logger.debug('Registration helper error: %s' % e)
+
+        # Keep the timeout active
+        return True
 
     def loop(self):
         try:
