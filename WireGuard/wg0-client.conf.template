@@ -1,0 +1,11 @@
+# Client template — replace placeholders
+[Interface]
+Address = 10.255.0.2/24
+PrivateKey = <CLIENT_PRIVATE_KEY>
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = <SERVER_PUBLIC_KEY>
+Endpoint = <EC2_PUBLIC_IP>:51820
+AllowedIPs = 10.255.0.1/32
+PersistentKeepalive = 25

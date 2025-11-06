@@ -1,0 +1,12 @@
+# Server template — replace placeholders
+[Interface]
+Address = 10.255.0.1/24
+ListenPort = 51820
+PrivateKey = <SERVER_PRIVATE_KEY>
+SaveConfig = true
+
+# Example peer block for the Pi (replace <CLIENT_PUBKEY> with the client's public key)
+[Peer]
+PublicKey = <CLIENT_PUBKEY>
+AllowedIPs = 10.255.0.2/32
+PersistentKeepalive = 25
