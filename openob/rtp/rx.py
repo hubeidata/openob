@@ -209,11 +209,13 @@ class RTPReceiver(object):
     def publish_levels(self, peaks):
         """Write the latest rx level readings into Redis for UI consumption."""
         if not self.redis:
+            self.logger.debug('Redis client not available; skipping publish for %s', self.vu_key)
             return
         try:
             left = float(peaks[0])
             right = float(peaks[1]) if len(peaks) > 1 else left
             timestamp = time.time()
+            self.logger.debug('Publishing VU to %s: left=%s right=%s ts=%s', self.vu_key, left, right, timestamp)
             pipe = self.redis.pipeline()
             pipe.hset(self.vu_key, mapping={
                 'left_db': left,
@@ -222,7 +224,7 @@ class RTPReceiver(object):
             })
             pipe.expire(self.vu_key, 5)
             pipe.execute()
-        except Exception:
-            pass
+        except Exception as e:
+            self.logger.exception('Failed to publish VU to Redis: %s', e)
 
 
