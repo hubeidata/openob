@@ -3,6 +3,7 @@ gi.require_version('Gst', '1.0')
 from gi.repository import Gst, GLib
 Gst.init(None)
 
+import time
 from openob.logger import LoggerFactory
 
 class RTPReceiver(object):
@@ -16,6 +17,9 @@ class RTPReceiver(object):
         self.logger_factory = LoggerFactory()
         self.logger = self.logger_factory.getLogger('node.%s.link.%s.%s' % (node_name, self.link_config.name, self.audio_interface.mode))
         self.logger.info('Creating reception pipeline')
+
+        self.redis = getattr(self.link_config, 'redis', None)
+        self.vu_key = f"openob:{self.link_config.name}:vu:rx"
 
         self.build_pipeline()
 
@@ -185,10 +189,12 @@ class RTPReceiver(object):
                         else:
                             self.logger.info('Receiving stereo audio transmission')
                     else:
-                        if len(struct.get_value('peak')) == 1:
-                            self.logger.debug('Level: %.2f', struct.get_value('peak')[0])
+                        peaks = struct.get_value('peak')
+                        if len(peaks) == 1:
+                            self.logger.debug('Level: %.2f', peaks[0])
                         else:
-                            self.logger.debug('Levels: L %.2f R %.2f' % (struct.get_value('peak')[0], struct.get_value('peak')[1]))
+                            self.logger.debug('Levels: L %.2f R %.2f' % (peaks[0], peaks[1]))
+                        self.publish_levels(peaks)
 
                 if struct.get_name() == 'GstUDPSrcTimeout':
                     # Gst.debug_bin_to_dot_file(self.pipeline, Gst.DebugGraphDetails.ALL, 'rx-graph')                    
@@ -199,5 +205,24 @@ class RTPReceiver(object):
                         self.pipeline.set_state(Gst.State.NULL)
                         self.main_loop.quit()
         return True
+
+    def publish_levels(self, peaks):
+        """Write the latest rx level readings into Redis for UI consumption."""
+        if not self.redis:
+            return
+        try:
+            left = float(peaks[0])
+            right = float(peaks[1]) if len(peaks) > 1 else left
+            timestamp = time.time()
+            pipe = self.redis.pipeline()
+            pipe.hset(self.vu_key, mapping={
+                'left_db': left,
+                'right_db': right,
+                'updated_ts': timestamp
+            })
+            pipe.expire(self.vu_key, 5)
+            pipe.execute()
+        except Exception:
+            pass
 
 
