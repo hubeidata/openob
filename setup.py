@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 from setuptools import setup
 long_description = ''
@@ -12,7 +12,11 @@ setup(name='OpenOB',
       author='James Harrison',
       author_email='james@talkunafraid.co.uk',
       url='https://github.com/JamesHarrison/openob',
-      scripts=['bin/openob'],
+      entry_points={
+          'console_scripts': [
+              'openob=openob.cli:main',
+          ],
+      },
       install_requires=['redis'],
       packages=['openob', 'openob.rtp'],
       classifiers=["Programming Language :: Python",
