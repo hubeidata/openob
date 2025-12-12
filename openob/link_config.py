@@ -27,7 +27,20 @@ class LinkConfig(object):
         self.redis = None
         while True:
             try:
-                self.redis = redis.StrictRedis(host=self.redis_host, charset="utf-8", decode_responses=True)
+                try:
+                    # redis-py >= 5 removed `charset` in favor of `encoding`.
+                    self.redis = redis.StrictRedis(
+                        host=self.redis_host,
+                        encoding="utf-8",
+                        decode_responses=True,
+                    )
+                except TypeError:
+                    # Compatibility with older redis-py versions.
+                    self.redis = redis.StrictRedis(
+                        host=self.redis_host,
+                        charset="utf-8",
+                        decode_responses=True,
+                    )
                 self.redis.ping()
                 break
             except Exception as e:
