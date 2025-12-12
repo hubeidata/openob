@@ -99,9 +99,13 @@ class LinkConfig(object):
     def set_from_argparse(self, opts):
         """Given an optparse object from bin/openob, configure this link"""
         self.set("name", opts.link_name)
+        # jitter_buffer is a receiver-side concept (rtpbin latency), but this
+        # value is stored in the shared config so either end can set it.
+        if hasattr(opts, 'jitter_buffer'):
+            self.set("jitter_buffer", opts.jitter_buffer)
+
         if opts.mode == "tx":
             self.set("port", opts.port)
-            self.set("jitter_buffer", opts.jitter_buffer)
             self.set("encoding", opts.encoding)
             self.set("bitrate", opts.bitrate)
             self.set("multicast", opts.multicast)
