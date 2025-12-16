@@ -3,6 +3,7 @@ gi.require_version('Gst', '1.0')
 from gi.repository import Gst, GLib
 Gst.init(None)
 
+import os
 import time
 from openob.logger import LoggerFactory
 
@@ -97,7 +98,13 @@ class RTPTransmitter(object):
         # Our level monitor
         level = Gst.ElementFactory.make('level')
         level.set_property('message', True)
-        level.set_property('interval', 1000000000)
+        try:
+            # Default to 200ms (was 1s). Smaller interval => more visible VU movement.
+            interval_ns = int(os.environ.get('OPENOB_LEVEL_INTERVAL_NS', '200000000'))
+        except Exception:
+            interval_ns = 200000000
+        interval_ns = max(20_000_000, min(2_000_000_000, interval_ns))
+        level.set_property('interval', interval_ns)
         bin.add(level)
 
         # Audio resampling and conversion
@@ -198,36 +205,89 @@ class RTPTransmitter(object):
                 if struct.get_name() == 'level':
                     if self.started is False:
                         self.started = True
-                        if len(struct.get_value('peak')) == 1:
+                        try:
+                            ch = len(struct.get_value('peak'))
+                        except Exception:
+                            try:
+                                ch = len(struct.get_value('rms'))
+                            except Exception:
+                                ch = 0
+                        if ch == 1:
                             self.logger.info('Started mono audio transmission')
                         else:
                             self.logger.info('Started stereo audio transmission')
                     else:
-                        peaks = struct.get_value('peak')
-                        if len(peaks) == 1:
-                            self.logger.debug('Level: %.2f', peaks[0])
-                        else:
-                            self.logger.debug('Levels: L %.2f R %.2f' % (peaks[0], peaks[1]))
-                        self.publish_levels(peaks)
+                        try:
+                            peaks = struct.get_value('peak')
+                        except Exception:
+                            peaks = None
+                        try:
+                            rms = struct.get_value('rms')
+                        except Exception:
+                            rms = None
+
+                        if peaks is not None:
+                            try:
+                                if len(peaks) == 1:
+                                    self.logger.debug('Peak: %.2f', peaks[0])
+                                else:
+                                    self.logger.debug('Peaks: L %.2f R %.2f' % (peaks[0], peaks[1]))
+                            except Exception:
+                                pass
+
+                        if rms is not None:
+                            try:
+                                if len(rms) == 1:
+                                    self.logger.debug('RMS: %.2f', rms[0])
+                                else:
+                                    self.logger.debug('RMS: L %.2f R %.2f' % (rms[0], rms[1]))
+                            except Exception:
+                                pass
+
+                        self.publish_levels(peaks=peaks, rms=rms)
         return True
 
     def get_caps(self):
         return self.caps
 
-    def publish_levels(self, peaks):
-        """Write the latest tx level readings into Redis for UI consumption."""
+    def publish_levels(self, peaks=None, rms=None):
+        """Write the latest tx level readings into Redis for UI (peak) and LCD (rms) consumption."""
         if not self.redis:
             return
         try:
-            left = float(peaks[0])
-            right = float(peaks[1]) if len(peaks) > 1 else left
+            left = None
+            right = None
+            left_rms = None
+            right_rms = None
+
+            if peaks is not None:
+                left = float(peaks[0])
+                right = float(peaks[1]) if len(peaks) > 1 else left
+
+            if rms is not None:
+                left_rms = float(rms[0])
+                right_rms = float(rms[1]) if len(rms) > 1 else left_rms
+
+            if left is None and left_rms is not None:
+                left = left_rms
+            if right is None and right_rms is not None:
+                right = right_rms
+
+            if left is None:
+                return
+
             timestamp = time.time()
             pipe = self.redis.pipeline()
-            pipe.hset(self.vu_key, mapping={
+            mapping = {
                 'left_db': left,
                 'right_db': right,
-                'updated_ts': timestamp
-            })
+                'updated_ts': timestamp,
+            }
+            if left_rms is not None:
+                mapping['left_rms_db'] = left_rms
+            if right_rms is not None:
+                mapping['right_rms_db'] = right_rms
+            pipe.hset(self.vu_key, mapping=mapping)
             pipe.expire(self.vu_key, 5)
             pipe.execute()
         except Exception:
