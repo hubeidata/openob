@@ -1,7 +1,164 @@
-import gi
-gi.require_version('Gst', '1.0')
-from gi.repository import Gst, GLib
-Gst.init(None)
+# Ensure native DLL search paths include bundled gvsbuild and configured GstBin
+import os, sys
+try:
+    runtime_root = os.path.abspath(os.path.join(os.path.dirname(sys.executable), '..'))
+    gvs_bin = os.path.join(runtime_root, 'gvsbuild', 'bin')
+    if os.path.isdir(gvs_bin):
+        try:
+            os.add_dll_directory(gvs_bin)
+        except Exception:
+            pass
+    gstbin = os.environ.get('GstBin','')
+    if gstbin and os.path.isdir(gstbin):
+        try:
+            os.add_dll_directory(gstbin)
+        except Exception:
+            pass
+except Exception:
+    pass
+
+# Preload native _gi extension via explicit LoadLibraryExW (helps Windows resolve dependencies)
+try:
+    import ctypes, glob
+    for p in sys.path:
+        try:
+            pfull = os.path.join(p, 'gi')
+            if os.path.isdir(pfull):
+                pyds = glob.glob(os.path.join(pfull, '_gi.*.pyd'))
+                if pyds:
+                    for libpath in pyds:
+                        try:
+                            ctypes.windll.kernel32.LoadLibraryExW(libpath, None, 0x00000008)
+                            break
+                        except Exception:
+                            continue
+                    break
+        except Exception:
+            continue
+except Exception:
+    pass
+
+try:
+    import gi
+    gi.require_version('Gst', '1.0')
+    from gi.repository import Gst, GLib
+    Gst.init(None)
+except Exception as e:
+    # Enhanced diagnostics: dump environment and attempt to load the native _gi module
+    import sys, os, traceback, glob, tempfile
+    def _dump_gi_debug():
+        try:
+            runtime_root = os.path.abspath(os.path.join(os.path.dirname(sys.executable), '..'))
+            logs_dir = os.path.join(runtime_root, 'logs')
+            if not os.path.isdir(logs_dir):
+                logs_dir = tempfile.gettempdir()
+            out = []
+            out.append('TIME: %s' % (__import__('datetime').datetime.utcnow().isoformat()))
+            out.append('PATH: %s' % os.environ.get('PATH',''))
+            out.append('GI_TYPELIB_PATH: %s' % os.environ.get('GI_TYPELIB_PATH',''))
+            out.append('GstBin: %s' % os.environ.get('GstBin',''))
+            out.append('sys.executable: %s' % sys.executable)
+            out.append('sys.path: %s' % repr(sys.path))
+
+            # gvsbuild bin folder (bundled with runtime)
+            gvs_bin = os.path.join(runtime_root, 'gvsbuild', 'bin')
+            out.append('gvsbuild_bin_exists: %s' % os.path.isdir(gvs_bin))
+            if os.path.isdir(gvs_bin):
+                out.append('gvsbuild_bin_files: %s' % ','.join(sorted(os.listdir(gvs_bin))[:200]))
+
+            # GstBin listing
+            gstbin = os.environ.get('GstBin','')
+            if gstbin and os.path.isdir(gstbin):
+                out.append('gstbin_files: %s' % ','.join(sorted(os.listdir(gstbin))[:200]))
+
+            # Locate gi package and _gi pyd
+            pyd_candidates = []
+            for p in sys.path:
+                try:
+                    pfull = os.path.join(p, 'gi')
+                    if os.path.isdir(pfull):
+                        pyd_candidates += glob.glob(os.path.join(pfull, '_gi.*.pyd'))
+                except Exception:
+                    continue
+            out.append('_gi_candidates: %s' % ','.join(pyd_candidates))
+
+            # Attempt to load the first _gi via ctypes to get a WinError message
+            try:
+                if pyd_candidates:
+                    import ctypes
+                    libpath = pyd_candidates[0]
+                    out.append('attempting ctypes.WinDLL load: %s' % libpath)
+                    try:
+                        ctypes.WinDLL(libpath)
+                        out.append('ctypes load succeeded')
+                    except Exception as win_e:
+                        out.append('ctypes load failed: %s' % repr(win_e))
+                        # Try LoadLibraryEx with altered search path
+                        try:
+                            LoadLibraryEx = ctypes.windll.kernel32.LoadLibraryExW
+                            LOAD_WITH_ALTERED_SEARCH_PATH = 0x00000008
+                            h = LoadLibraryEx(libpath, None, LOAD_WITH_ALTERED_SEARCH_PATH)
+                            out.append('LoadLibraryEx result: %s' % str(h))
+                        except Exception as ex2:
+                            out.append('LoadLibraryEx exception: %s' % repr(ex2))
+            except Exception as ex:
+                out.append('ctypes test exception: %s' % repr(ex))
+
+            out.append('traceback:')
+            out.extend(traceback.format_exception(type(e), e, e.__traceback__))
+
+            fname = os.path.join(logs_dir, 'gi_load_debug.txt')
+            with open(fname, 'a', encoding='utf-8') as f:
+                f.write('\n'.join(out))
+                f.write('\n\n')
+            return fname
+        except Exception:
+            return None
+
+    # Try to dump diagnostics robustly
+    debug_file = None
+    try:
+        debug_file = _dump_gi_debug()
+    except Exception as dump_e:
+        try:
+            # fallback: try executing diagnostic_manual.py and capture its output
+            import subprocess
+            runtime_root = os.path.abspath(os.path.join(os.path.dirname(sys.executable), '..'))
+            manual = os.path.join(runtime_root, 'diagnostic_manual.py')
+            if os.path.exists(manual):
+                out = subprocess.check_output([sys.executable, manual], stderr=subprocess.STDOUT, timeout=20)
+                # write fallback output next to logs
+                fallback = os.path.join(runtime_root, 'logs', 'gi_load_debug_fallback.txt')
+                with open(fallback, 'wb') as f:
+                    f.write(out)
+                debug_file = fallback
+        except Exception:
+            pass
+
+    # If LoadLibraryEx succeeded in diagnostics, try to import again before bailing out
+    try:
+        import importlib
+        # attempt to import gi again now that we may have loaded native dlls
+        import gi as _gi_temp
+        importlib.reload(_gi_temp)
+        _gi_temp.require_version('Gst', '1.0')
+        from gi.repository import Gst as _Gst_temp
+        _Gst_temp.init(None)
+        # If we reach here, gi import now works — proceed without raising
+        # (this is a rare fallback path)
+        print('gi import succeeded on retry after LoadLibraryEx')
+    except Exception:
+        pass
+
+    # Re-raise with hint and include debug file location (if any)
+    msg = (
+        "PyGObject (gi) + GStreamer are required for RTP transmission. "
+        "Install GStreamer (msvc_x86_64) and ensure the Python bindings for gi are available "
+        "for this Python version, and that GstBin/GI_TYPELIB_PATH are configured."
+    )
+    if debug_file:
+        msg = msg + ("\nDetailed diagnostic written to: %s" % debug_file)
+    raise RuntimeError(msg) from e
 
 import os
 import time

@@ -1,8 +1,6 @@
 import sys
 import time
 from openob.logger import LoggerFactory
-from openob.rtp.tx import RTPTransmitter
-from openob.rtp.rx import RTPReceiver
 from openob.link_config import LinkConfig
 
 class Node(object):
@@ -42,6 +40,40 @@ class Node(object):
                 if audio_interface.mode == 'tx':
                     try:
                         link_logger.info("Starting up transmitter")
+                        # Log environment at import-time to diagnose missing DLLs (INFO level so it appears in logs)
+                        import os
+                        path_val = os.environ.get('PATH','')
+                        split_path = path_val.split(';') if path_val else []
+                        link_logger.info("ENV PATH (first entries): %s", ';'.join(split_path[:6]))
+                        link_logger.info("ENV GI_TYPELIB_PATH: %s", os.environ.get('GI_TYPELIB_PATH',''))
+                        link_logger.info("ENV GstBin: %s", os.environ.get('GstBin',''))
+                        # Check presence of bundled gvsbuild bin
+                        runtime_root = os.path.abspath(os.path.join(os.path.dirname(sys.executable), '..'))
+                        gvs_bin = os.path.join(runtime_root, 'gvsbuild', 'bin')
+                        link_logger.info("gvsbuild_bin_exists: %s", os.path.isdir(gvs_bin))
+                        # Preload native gi extension to help dependency resolution on Windows
+                        try:
+                            import ctypes, glob
+                            # find _gi pyd in sys.path
+                            for p in sys.path:
+                                try:
+                                    pfull = os.path.join(p, 'gi')
+                                    if os.path.isdir(pfull):
+                                        pyds = glob.glob(os.path.join(pfull, '_gi.*.pyd'))
+                                        if pyds:
+                                            for libpath in pyds:
+                                                try:
+                                                    ctypes.windll.kernel32.LoadLibraryExW(libpath, None, 0x00000008)
+                                                    break
+                                                except Exception:
+                                                    continue
+                                            break
+                                except Exception:
+                                    continue
+                        except Exception:
+                            pass
+                        # Import lazily so `openob -h` doesn't require GStreamer/PyGObject.
+                        from openob.rtp.tx import RTPTransmitter
                         transmitter = RTPTransmitter(self.node_name, link_config, audio_interface)
                         transmitter.run()
                         caps = transmitter.get_caps()
@@ -57,6 +89,8 @@ class Node(object):
                     link_logger.info("Got caps from transmitter")
                     try:
                         link_logger.info("Starting up receiver")
+                        # Import lazily so `openob -h` doesn't require GStreamer/PyGObject.
+                        from openob.rtp.rx import RTPReceiver
                         receiver = RTPReceiver(self.node_name, link_config, audio_interface)
                         receiver.run()
                         receiver.loop()

@@ -1,7 +1,14 @@
-import gi
-gi.require_version('Gst', '1.0')
-from gi.repository import Gst, GLib
-Gst.init(None)
+try:
+    import gi
+    gi.require_version('Gst', '1.0')
+    from gi.repository import Gst, GLib
+    Gst.init(None)
+except Exception as e:
+    raise RuntimeError(
+        "PyGObject (gi) + GStreamer are required for RTP reception. "
+        "Install GStreamer (msvc_x86_64) and ensure the Python bindings for gi are available "
+        "for this Python version, and that GstBin/GI_TYPELIB_PATH are configured."
+    ) from e
 
 import os
 import time
