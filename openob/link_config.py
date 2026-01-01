@@ -27,21 +27,27 @@ class LinkConfig(object):
         self.redis = None
         while True:
             try:
-                try:
-                    # redis-py >= 5 removed `charset` in favor of `encoding`.
-                    self.redis = redis.StrictRedis(
-                        host=self.redis_host,
-                        encoding="utf-8",
-                        decode_responses=True,
-                    )
-                except TypeError:
-                    # Compatibility with older redis-py versions.
-                    self.redis = redis.StrictRedis(
-                        host=self.redis_host,
-                        charset="utf-8",
-                        decode_responses=True,
-                    )
-                self.redis.ping()
+                kw = dict(host=self.redis_host, db=0, decode_responses=True)
+                client = None
+                last_err = None
+                for variant in ('encoding', 'none'):
+                    try:
+                        if variant == 'encoding':
+                            client = redis.StrictRedis(**kw, encoding='utf-8')
+                        else:
+                            client = redis.StrictRedis(**kw)
+                        break
+                    except TypeError as e:
+                        # Debug only; don't spam the error log with TypeError trace
+                        self.logger.debug(f"Redis init with {variant} failed: {e}")
+                        last_err = e
+
+                if client is None:
+                    # All attempts failed; raise the last error so outer except logs it
+                    raise last_err
+
+                client.ping()
+                self.redis = client
                 break
             except Exception as e:
                 self.logger.error(

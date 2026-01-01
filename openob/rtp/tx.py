@@ -410,6 +410,7 @@ class RTPTransmitter(object):
     def publish_levels(self, peaks=None, rms=None):
         """Write the latest tx level readings into Redis for UI (peak) and LCD (rms) consumption."""
         if not self.redis:
+            self.logger.debug("No Redis connection, skipping VU publish")
             return
         try:
             left = None
@@ -447,6 +448,7 @@ class RTPTransmitter(object):
             pipe.hset(self.vu_key, mapping=mapping)
             pipe.expire(self.vu_key, 5)
             pipe.execute()
-        except Exception:
+            self.logger.debug(f"Published VU levels to Redis: left={left:.2f}, right={right:.2f}")
+        except Exception as e:
             # Avoid crashing audio path due to telemetry errors
-            pass
+            self.logger.warning(f"Failed to publish VU levels to Redis: {e}")
