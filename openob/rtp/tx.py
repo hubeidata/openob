@@ -309,15 +309,6 @@ class RTPTransmitter(object):
         # if audio_rate has been specified, then add that to the capsfilter
         if self.audio_interface.samplerate != 0:
             caps.set_value('rate', self.audio_interface.samplerate)
-
-        # If channel count was forced via CLI, add that to caps so GStreamer will deliver the requested channels
-        try:
-            ch = int(getattr(self.audio_interface, 'channels', 0) or 0)
-        except Exception:
-            ch = 0
-        if ch in (1, 2):
-            caps.set_value('channels', ch)
-            self.logger.info('Requesting input channels: %d' % ch)
         
         self.logger.debug(caps.to_string())
         capsfilter.set_property('caps', caps)
