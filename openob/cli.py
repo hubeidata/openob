@@ -104,6 +104,9 @@ def build_parser() -> argparse.ArgumentParser:
         '-r', '--samplerate', type=int, default=0, help="Set the sample rate to request from the input (Hz)"
     )
     parser_tx.add_argument(
+        '-c', '--channels', type=int, choices=[1, 2], default=0, help="Force input channels (1 or 2). If omitted, use device default"
+    )
+    parser_tx.add_argument(
         '-e',
         '--encoding',
         type=str,

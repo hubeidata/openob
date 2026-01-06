@@ -39,6 +39,12 @@ class AudioInterface(object):
         if opts.mode == "tx":
             self.set("type", opts.audio_input)
             self.set("samplerate", opts.samplerate)
+            # channels argument: 0 means unspecified, otherwise 1 or 2
+            try:
+                ch = int(getattr(opts, 'channels', 0) or 0)
+            except Exception:
+                ch = 0
+            self.set("channels", ch)
         elif opts.mode == "rx":
             self.set("type", opts.audio_output)
         if self.get("type") == "alsa":

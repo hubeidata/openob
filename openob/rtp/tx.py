@@ -231,7 +231,37 @@ class RTPTransmitter(object):
 
         # Audio input
         if self.audio_interface.type == 'auto':
-            source = Gst.ElementFactory.make('autoaudiosrc')
+            # On Windows, allow forcing wasapisrc (exclusive/device) via env vars
+            source = None
+            try:
+                if sys.platform.startswith('win') and (os.environ.get('OPENOB_WASAPI_EXCLUSIVE') or os.environ.get('OPENOB_WASAPI_DEVICE')):
+                    try:
+                        s = Gst.ElementFactory.make('wasapisrc')
+                        if s:
+                            source = s
+                            # apply exclusive mode if requested
+                            try:
+                                if os.environ.get('OPENOB_WASAPI_EXCLUSIVE','').lower() in ('1','true','yes'):
+                                    source.set_property('exclusive', True)
+                                    self.logger.info('wasapisrc: exclusive mode enabled (OPENOB_WASAPI_EXCLUSIVE=1)')
+                            except Exception as e:
+                                self.logger.warning('Failed to enable wasapisrc exclusive mode: %s' % e)
+                            # apply specific device if requested
+                            try:
+                                dev = os.environ.get('OPENOB_WASAPI_DEVICE','').strip()
+                                if dev:
+                                    source.set_property('device', dev)
+                                    self.logger.info('wasapisrc: device set to %s' % dev)
+                            except Exception as e:
+                                self.logger.warning('Failed to set wasapisrc device: %s' % e)
+                    except Exception:
+                        source = None
+            except Exception:
+                source = None
+
+            # fallback to autoaudiosrc if wasapisrc not used
+            if not source:
+                source = Gst.ElementFactory.make('autoaudiosrc')
         elif self.audio_interface.type == 'alsa':
             source = Gst.ElementFactory.make('alsasrc')
             source.set_property('device', self.audio_interface.alsa_device)
@@ -249,7 +279,6 @@ class RTPTransmitter(object):
 
         elif self.audio_interface.type == 'test':
             source = Gst.ElementFactory.make('audiotestsrc')
-
         bin.add(source)
 
         # Our level monitor
@@ -280,6 +309,15 @@ class RTPTransmitter(object):
         # if audio_rate has been specified, then add that to the capsfilter
         if self.audio_interface.samplerate != 0:
             caps.set_value('rate', self.audio_interface.samplerate)
+
+        # If channel count was forced via CLI, add that to caps so GStreamer will deliver the requested channels
+        try:
+            ch = int(getattr(self.audio_interface, 'channels', 0) or 0)
+        except Exception:
+            ch = 0
+        if ch in (1, 2):
+            caps.set_value('channels', ch)
+            self.logger.info('Requesting input channels: %d' % ch)
         
         self.logger.debug(caps.to_string())
         capsfilter.set_property('caps', caps)
@@ -288,7 +326,25 @@ class RTPTransmitter(object):
         source.link(level)
         level.link(resample)
         resample.link(convert)
-        convert.link(capsfilter)
+
+        # Insert a queue between convert and capsfilter to add capture-side buffering and
+        # avoid clicks caused by short-term scheduling/contention in the audio source.
+        # Size (ms) can be adjusted via OPENOB_SRC_BUFFER_MS environment variable (default 50 ms).
+        try:
+            src_buf_ms = int(os.environ.get('OPENOB_SRC_BUFFER_MS', '50'))
+        except Exception:
+            src_buf_ms = 50
+        src_buf_ns = int(src_buf_ms) * 1000000
+        queue = Gst.ElementFactory.make('queue')
+        # max-size-time is in nanoseconds
+        queue.set_property('max-size-time', src_buf_ns)
+        # set a modest min threshold so playback doesn't stall unnecessarily
+        queue.set_property('min-threshold-time', int(max(1_000_000, src_buf_ns // 4)))
+        bin.add(queue)
+        convert.link(queue)
+        queue.link(capsfilter)
+
+        self.logger.info('Insert capture buffer queue: %d ms' % src_buf_ms)
 
         bin.add_pad(Gst.GhostPad.new('src', capsfilter.get_static_pad('src')))
 
