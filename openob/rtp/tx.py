@@ -311,10 +311,20 @@ class RTPTransmitter(object):
             caps.set_value('rate', self.audio_interface.samplerate)
 
         # If channel count was forced via CLI (stored in AudioInterface), request it in the caps
+        # Be explicit about how we read the value so we can debug failures where it appears unset
         try:
-            ch = int(getattr(self.audio_interface, 'channels', 0) or 0)
-        except Exception:
+            ai_ch = None
+            try:
+                ai_ch = self.audio_interface.channels
+            except Exception:
+                # audio_interface.__getattr__ may raise KeyError if not set
+                ai_ch = None
+            self.logger.debug('AudioInterface.channels reported: %s', repr(ai_ch))
+            ch = int(ai_ch or 0)
+        except Exception as e:
+            self.logger.debug('Failed to read requested channels: %s', e)
             ch = 0
+
         if ch in (1, 2):
             caps.set_value('channels', ch)
             self.logger.info('Requesting input channels: %d' % ch)
