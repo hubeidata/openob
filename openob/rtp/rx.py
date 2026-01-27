@@ -172,6 +172,33 @@ class RTPReceiver(object):
 
         udpsrc.link_pads('src', rtpbin, 'recv_rtp_sink_0')
 
+        # RTCP Support
+        rtcpsrc = Gst.ElementFactory.make('udpsrc', 'rtcpsrc')
+        rtcpsrc.set_property('port', self.link_config.port + 1)
+        rtcpsrc.set_property('caps', Gst.Caps.from_string("application/x-rtcp"))
+        if self.link_config.multicast:
+            rtcpsrc.set_property('auto_multicast', True)
+            rtcpsrc.set_property('multicast_group', self.link_config.receiver_host)
+        bin.add(rtcpsrc)
+
+        rtcpsink = Gst.ElementFactory.make('udpsink', 'rtcpsink')
+        rtcpsink.set_property('port', self.link_config.port + 1)
+        rtcpsink.set_property('async', False)
+        rtcpsink.set_property('sync', False)
+        if self.link_config.multicast:
+            rtcpsink.set_property('auto_multicast', True)
+            rtcpsink.set_property('host', self.link_config.receiver_host)
+        else:
+            sender_host = self.link_config.get('sender_host')
+            if sender_host:
+                rtcpsink.set_property('host', sender_host)
+            else:
+                self.logger.warn('RTCP return channel disabled (no sender_host configured)')
+        bin.add(rtcpsink)
+
+        rtcpsrc.link_pads('src', rtpbin, 'recv_rtcp_sink_0')
+        rtpbin.link_pads('send_rtcp_src_0', rtcpsink, 'sink')
+
         valve = Gst.ElementFactory.make('valve', 'valve')
         bin.add(valve)
         

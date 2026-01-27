@@ -225,6 +225,11 @@ class RTPTransmitter(object):
         bus.add_signal_watch()
         bus.connect('message', self.on_message)
 
+    def on_new_ssrc(self, session, source):
+        # Capture the remote source (RX) to read stats later
+        self.logger.info("New RTCP source detected: %s" % source)
+        self.rtcp_source = source
+
     def build_audio_interface(self):
         self.logger.debug('Building audio input bin')
         bin = Gst.Bin.new('audio')
@@ -404,6 +409,13 @@ class RTPTransmitter(object):
         rtpbin.set_property('latency', 0)
         bin.add(rtpbin)
 
+        # Hook into session 0 to get stats
+        try:
+            session = rtpbin.emit('get-internal-session', 0)
+            session.connect('on-new-ssrc', self.on_new_ssrc)
+        except Exception as e:
+            self.logger.warning("Failed to connect to rtpbin session for stats: %s" % e)
+
         # TODO: Add a tee here, and sort out creating multiple UDP sinks for multipath
         udpsink = Gst.ElementFactory.make('udpsink', 'udpsink')
         udpsink.set_property('host', self.link_config.receiver_host)
@@ -415,9 +427,29 @@ class RTPTransmitter(object):
             self.logger.info('Multicast mode enabled')
         bin.add(udpsink)
 
+        # RTCP Support
+        rtcpsink = Gst.ElementFactory.make('udpsink', 'rtcpsink')
+        rtcpsink.set_property('host', self.link_config.receiver_host)
+        rtcpsink.set_property('port', self.link_config.port + 1)
+        rtcpsink.set_property('async', False)
+        rtcpsink.set_property('sync', False)
+        if self.link_config.multicast:
+            rtcpsink.set_property('auto_multicast', True)
+        bin.add(rtcpsink)
+
+        rtcpsrc = Gst.ElementFactory.make('udpsrc', 'rtcpsrc')
+        rtcpsrc.set_property('port', self.link_config.port + 1)
+        rtcpsrc.set_property('caps', Gst.Caps.from_string("application/x-rtcp"))
+        if self.link_config.multicast:
+            rtcpsrc.set_property('auto_multicast', True)
+            rtcpsrc.set_property('multicast_group', self.link_config.receiver_host)
+        bin.add(rtcpsrc)
+
         bin.add_pad(Gst.GhostPad.new('sink', rtpbin.get_request_pad('send_rtp_sink_0')))
 
         rtpbin.link_pads('send_rtp_src_0', udpsink, 'sink')
+        rtpbin.link_pads('send_rtcp_src_0', rtcpsink, 'sink')
+        rtcpsrc.link_pads('src', rtpbin, 'recv_rtcp_sink_0')
 
         return bin
 
@@ -506,6 +538,30 @@ class RTPTransmitter(object):
                 'left_db': left,
                 'right_db': right,
                 'updated_ts': timestamp,
+
+            # Publish stats if we have them
+            if hasattr(self, 'rtcp_source') and self.rtcp_source:
+                try:
+                    stats = self.rtcp_source.get_property('stats')
+                    # 'round-trip-time' is in nanoseconds. Return 0 if missing.
+                    rtt_ns = stats.get_value('round-trip-time')
+                    packets_lost = stats.get_value('packets-lost')
+                    jitter = stats.get_value('jitter')
+                    
+                    if rtt_ns is not None:
+                        stats_key = f"openob:{self.link_config.name}:stats"
+                        stats_map = {
+                            'rtt_ms': rtt_ns / 1000000.0, # convert to ms
+                            'loss': packets_lost if packets_lost is not None else -1,
+                            'jitter': jitter if jitter is not None else -1,
+                            'updated_ts': timestamp
+                        }
+                        pipe.hset(stats_key, mapping=stats_map)
+                        pipe.expire(stats_key, 5)
+                        self.logger.debug(f"Published Stats: {stats_map}")
+                except Exception as ex:
+                    self.logger.debug(f"Failed to read/publish stats: {ex}")
+
             }
             if left_rms is not None:
                 mapping['left_rms_db'] = left_rms
