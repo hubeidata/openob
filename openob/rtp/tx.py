@@ -538,6 +538,13 @@ class RTPTransmitter(object):
                 'left_db': left,
                 'right_db': right,
                 'updated_ts': timestamp,
+            }
+            if left_rms is not None:
+                mapping['left_rms_db'] = left_rms
+            if right_rms is not None:
+                mapping['right_rms_db'] = right_rms
+            pipe.hset(self.vu_key, mapping=mapping)
+            pipe.expire(self.vu_key, 5)
 
             # Publish stats if we have them
             if hasattr(self, 'rtcp_source') and self.rtcp_source:
@@ -562,13 +569,6 @@ class RTPTransmitter(object):
                 except Exception as ex:
                     self.logger.debug(f"Failed to read/publish stats: {ex}")
 
-            }
-            if left_rms is not None:
-                mapping['left_rms_db'] = left_rms
-            if right_rms is not None:
-                mapping['right_rms_db'] = right_rms
-            pipe.hset(self.vu_key, mapping=mapping)
-            pipe.expire(self.vu_key, 5)
             pipe.execute()
             self.logger.debug(f"Published VU levels to Redis: left={left:.2f}, right={right:.2f}")
         except Exception as e:
