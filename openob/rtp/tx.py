@@ -412,7 +412,16 @@ class RTPTransmitter(object):
         # Hook into session 0 to get stats
         try:
             session = rtpbin.emit('get-internal-session', 0)
-            session.connect('on-new-ssrc', self.on_new_ssrc)
+            if session:
+                session.connect('on-new-ssrc', self.on_new_ssrc)
+                self.logger.debug('Connected to rtpbin internal session for stats')
+            else:
+                # Some GStreamer builds may not expose an internal session; try top-level signal as a fallback
+                try:
+                    rtpbin.connect('on-new-ssrc', self.on_new_ssrc)
+                    self.logger.debug('Connected to rtpbin top-level on-new-ssrc signal for stats')
+                except Exception as e2:
+                    self.logger.warning('Failed to connect to rtpbin session for stats (no internal session and top-level connect failed): %s' % e2)
         except Exception as e:
             self.logger.warning("Failed to connect to rtpbin session for stats: %s" % e)
 
