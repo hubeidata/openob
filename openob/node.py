@@ -85,7 +85,19 @@ class Node(object):
                         time.sleep(0.5)
                 elif audio_interface.mode == 'rx':
                     link_logger.info("Waiting for transmitter capabilities...")
-                    caps = link_config.blocking_get("caps")
+                    caps = None
+                    start_wait = time.time()
+                    while caps is None:
+                        caps = link_config.get("caps")
+                        if caps is None:
+                            if time.time() - start_wait > 5:
+                                link_logger.info("Timeout waiting for transmitter capabilities. Retrying...")
+                                break
+                            time.sleep(0.1)
+                    
+                    if caps is None:
+                        continue
+
                     link_logger.info("Got caps from transmitter")
                     try:
                         link_logger.info("Starting up receiver")
