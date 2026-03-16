@@ -27,27 +27,36 @@ class LinkConfig(object):
         self.redis = None
         while True:
             try:
-                kw = dict(host=self.redis_host, db=0, decode_responses=True)
-                client = None
+                # Try a few constructor variants for broad redis-py compatibility.
                 last_err = None
-                for variant in ('encoding', 'none'):
+                client = None
+                for variant in ("encoding", "charset", "minimal"):
                     try:
-                        if variant == 'encoding':
-                            client = redis.StrictRedis(**kw, encoding='utf-8')
-                        else:
-                            client = redis.StrictRedis(**kw)
+                        if variant == "encoding":
+                            client = redis.StrictRedis(
+                                host=self.redis_host,
+                                encoding="utf-8",
+                                decode_responses=True,
+                            )
+                        elif variant == "charset":
+                            client = redis.StrictRedis(
+                                host=self.redis_host,
+                                charset="utf-8",
+                                decode_responses=True,
+                            )
+                        else:  # "minimal" – no encoding kwargs at all
+                            client = redis.StrictRedis(host=self.redis_host)
                         break
                     except TypeError as e:
-                        # Debug only; don't spam the error log with TypeError trace
-                        self.logger.debug(f"Redis init with {variant} failed: {e}")
+                        # Parameter mismatch for this redis-py version – try next style.
                         last_err = e
+                        client = None
 
                 if client is None:
-                    # All attempts failed; raise the last error so outer except logs it
-                    raise last_err
+                    raise last_err or Exception("Unable to construct Redis client")
 
-                client.ping()
                 self.redis = client
+                self.redis.ping()
                 break
             except Exception as e:
                 self.logger.error(
