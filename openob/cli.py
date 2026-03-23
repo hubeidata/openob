@@ -52,6 +52,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         help="The link name this OpenOB Manager is operating on; must be the same on both Nodes",
     )
+    parser.add_argument('--config-retries', type=int, default=120, help='Number of retries to connect to config host before aborting')
+    parser.add_argument('--config-timeout', type=float, default=3.0, help='Redis socket timeout in seconds')
+    parser.add_argument('--config-delay', type=float, default=0.1, help='Initial retry delay in seconds')
 
     subparsers = parser.add_subparsers(help="The link mode to operate in on this end")
 
@@ -258,7 +261,13 @@ def main(argv=None) -> int:
 
     LoggerFactory(level=opts.verbose)
 
-    link_config = LinkConfig(opts.link_name, opts.config_host)
+    link_config = LinkConfig(
+        opts.link_name,
+        opts.config_host,
+        max_retries=opts.config_retries,
+        initial_delay=opts.config_delay,
+        socket_timeout=opts.config_timeout,
+    )
     link_config.set_from_argparse(opts)
 
     audio_interface = AudioInterface(opts.node_name)

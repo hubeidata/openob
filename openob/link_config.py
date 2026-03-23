@@ -12,20 +12,44 @@ class LinkConfig(object):
         to receive the stream using the data and methods in this config.
     """
 
-    def __init__(self, link_name, redis_host):
+    def __init__(self, link_name, redis_host, max_retries=120, initial_delay=0.1, max_delay=5.0, socket_timeout=3.0):
         """
             Set up a new LinkConfig instance - needs to know the link name and
-            configuration host.
+            configuration host. The redis_host can be host or host:port.
+
+            max_retries: number of attempts before failing.
+            initial_delay: first retry delay in seconds.
+            max_delay: maximum exponential backoff delay.
+            socket_timeout: redis socket connect/read timeout in seconds.
         """
         self.int_properties = ['port', 'jitter_buffer', 'opus_framesize', 'opus_complexity', 'bitrate', 'opus_loss_expectation']
         self.bool_properties = ['opus_dtx', 'opus_fec', 'multicast']
         self.link_name = link_name
         self.redis_host = redis_host
+        self.max_retries = max_retries
+        self.initial_delay = initial_delay
+        self.max_delay = max_delay
+        self.socket_timeout = socket_timeout
         self.logger_factory = LoggerFactory()
         self.logger = self.logger_factory.getLogger('link.%s.config' % self.link_name)
         self.logger.info("Connecting to configuration host %s" % self.redis_host)
         self.redis = None
-        while True:
+
+        host = self.redis_host
+        port = 6379
+        if ':' in self.redis_host:
+            try:
+                host, port_str = self.redis_host.rsplit(':', 1)
+                port = int(port_str)
+            except ValueError:
+                self.logger.warning("Invalid redis port in %s, using default 6379" % self.redis_host)
+                host = self.redis_host
+                port = 6379
+
+        attempt = 0
+        delay = self.initial_delay
+        while attempt < self.max_retries:
+            attempt += 1
             try:
                 # Try a few constructor variants for broad redis-py compatibility.
                 last_err = None
@@ -34,18 +58,29 @@ class LinkConfig(object):
                     try:
                         if variant == "encoding":
                             client = redis.StrictRedis(
-                                host=self.redis_host,
+                                host=host,
+                                port=port,
                                 encoding="utf-8",
                                 decode_responses=True,
+                                socket_connect_timeout=self.socket_timeout,
+                                socket_timeout=self.socket_timeout,
                             )
                         elif variant == "charset":
                             client = redis.StrictRedis(
-                                host=self.redis_host,
+                                host=host,
+                                port=port,
                                 charset="utf-8",
                                 decode_responses=True,
+                                socket_connect_timeout=self.socket_timeout,
+                                socket_timeout=self.socket_timeout,
                             )
                         else:  # "minimal" – no encoding kwargs at all
-                            client = redis.StrictRedis(host=self.redis_host)
+                            client = redis.StrictRedis(
+                                host=host,
+                                port=port,
+                                socket_connect_timeout=self.socket_timeout,
+                                socket_timeout=self.socket_timeout,
+                            )
                         break
                     except TypeError as e:
                         # Parameter mismatch for this redis-py version – try next style.
@@ -57,13 +92,20 @@ class LinkConfig(object):
 
                 self.redis = client
                 self.redis.ping()
-                break
+                self.logger.info("Connected to configuration host on attempt %d", attempt)
+                return
             except Exception as e:
                 self.logger.error(
-                    "Unable to connect to configuration host! Retrying. (%s)"
-                    % e
+                    "Unable to connect to configuration host (attempt %d/%d): %s",
+                    attempt,
+                    self.max_retries,
+                    e,
                 )
-                time.sleep(0.1)
+                if attempt >= self.max_retries:
+                    self.logger.error("Reached maximum retries (%d), aborting.", self.max_retries)
+                    raise
+                time.sleep(delay)
+                delay = min(self.max_delay, delay * 1.5)
 
     def blocking_get(self, key):
         """Get a value, blocking until it's not None if needed"""
